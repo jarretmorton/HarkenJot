@@ -7,12 +7,12 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 ## Features
 
 - **Voice Notes** — Record voice notes with automatic speech-to-text via Web Speech API (primary) or Whisper AI (offline fallback)
-- **Multiple Content Types** — Load articles, PDFs, YouTube videos, and podcasts in a single interface
+- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, and X.com/Twitter videos in a single interface
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
 - **Library Management** — Browse, search, export, and import your notes and sources
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
-- **Fully Offline-Capable** — All data stored in browser localStorage; no account or server needed
+- **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
 - **Single-File Deployment** — The entire application is one HTML file
 
 ## Getting Started
@@ -41,7 +41,7 @@ HarkenJot has three main views:
 | Tab | Purpose |
 |-----|---------|
 | **Reader** | Load articles (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
-| **Media** | Play YouTube videos or podcasts (via RSS/audio URL). Take voice or text notes anchored to the playback timestamp. |
+| **Media** | Play YouTube videos, podcasts (via RSS/audio URL), or X.com/Twitter videos. Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, edit, export to JSON, or copy notes to clipboard. |
 
 ## Tech Stack
@@ -52,7 +52,7 @@ HarkenJot has three main views:
 - **Transformers.js** — Local Whisper AI speech recognition
 - **Web Speech API** — Primary browser-native speech recognition
 - **Web Audio API** — Audio processing for Whisper
-- **localStorage** — Client-side data persistence
+- **IndexedDB** — Client-side data persistence (localStorage fallback)
 
 All dependencies are loaded from CDN at runtime. There are no build tools, bundlers, or package managers involved.
 
@@ -69,7 +69,7 @@ HTTPS is recommended for full browser API support (microphone access, Media Sess
 
 ## Data & Privacy
 
-All notes and sources are stored in the browser's `localStorage`. No data is sent to any server. You can export your full library as a JSON file for backup or transfer between browsers.
+All notes and sources are stored locally in the browser (IndexedDB, falling back to `localStorage`). No data is sent to any server. You can export your full library as a JSON file for backup or transfer between browsers.
 
 ## License
 

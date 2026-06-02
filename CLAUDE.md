@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~6,000 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
+HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~9,000 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
 
 ## Architecture
 
@@ -20,25 +20,29 @@ CLAUDE.md        # This file
 
 ### Key Sections in HarkenJot.html
 
+Line numbers are approximate — they drift as the file grows. Search for the named symbol if a range is stale.
+
 | Line Range | Section |
 |------------|---------|
-| 1–10 | Head, CDN script imports (React 18, Babel, PDF.js) |
-| 14–165 | `webSpeechAPI` — Browser-native speech recognition module |
-| 67–165 | `whisperASR` — Offline Whisper AI speech recognition fallback |
-| 233–1771 | `<style>` — All CSS, including CSS variables for theming |
-| 1776–1778 | React hooks imports |
-| 1780–1815 | `Icons` — SVG icon components |
-| 1817–1838 | Utility functions (`generateId`, `safeHostname`, `formatTime`, etc.) |
-| 1840–1903 | `Toast` — Notification component with undo support |
-| 1905–1940 | `MediaSessionManager` — Browser Media Session API integration |
-| 2015–2038 | localStorage migration (legacy `marginalia_` → `harkenjot_` keys) |
-| 2041–2386 | `App` — Root component, state management, tab routing |
-| 2388–2463 | `EditableTitle` — Inline title editing component |
-| 2465–3921 | `ReaderView` — Article/PDF reader with TTS and voice notes |
-| 3923–5557 | `MediaView` — YouTube/podcast player with timestamped notes |
-| 5559–5808 | `LibraryView` — Source and note management, import/export |
-| 5810–5990 | `NoteSidebar` — Notes display, editing, and navigation |
-| ~5995–6004 | `ReactDOM.createRoot` render call |
+| 1–11 | Head, CDN script imports (React 18, ReactDOM 18, Babel, PDF.js) |
+| 14–58 | `webSpeechAPI` — Browser-native speech recognition module |
+| 60–230 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
+| 231 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
+| 232–2115 | `<style>` — All CSS, including CSS variables for theming |
+| 2121 | React hooks imports |
+| 2124–2164 | `Icons` — SVG icon components |
+| 2165–2186 | Utility functions (`generateId`, `safeHostname`, `formatTime`, etc.) |
+| 2282–2458 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 2327–2333 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 2459–2522 | `Toast` — Notification component with undo support |
+| 2524–2663 | `MediaSessionManager` — Browser Media Session API integration |
+| 2664–3112 | `App` — Root component, state management, tab routing |
+| 3113–3619 | `EditableTitle` — Inline title editing component |
+| 3620–5755 | `ReaderView` — Article/PDF reader with TTS and voice notes |
+| 5756–8569 | `MediaView` — YouTube / podcast / X.com video player with timestamped notes |
+| 8570–8884 | `LibraryView` — Source and note management, import/export |
+| 8885–9086 | `NoteSidebar` — Notes display, editing, and navigation |
+| 9087 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -57,21 +61,28 @@ App
 
 All state lives in the `App` component via `useState` hooks. There is no external state library. Key state:
 
-- `sources` — Array of source objects (articles, PDFs, videos, podcasts)
+- `sources` — Array of source objects (articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, pasted text)
 - `notes` — Array of note objects linked to sources
 - `activeTab` — Current view (`reader`, `media`, `library`)
 - `currentSource` — The active source being consumed
 - `sidebarOpen` — Notes sidebar visibility
 - `carMode` — Simplified large-button UI mode
 
-State is persisted to `localStorage` automatically via `useEffect`:
+State is persisted via the `HJStore` module, which is backed by **IndexedDB**
+(object store `kv` in database `harkenjot`) to avoid the ~5 MB localStorage cap.
+`HJStore` hydrates the entire keyspace into an in-memory cache on `init()` so
+callers get a synchronous `get()`, then writes through to IndexedDB
+asynchronously on each `set()`. If IndexedDB is unavailable, it falls back to
+`localStorage` (using the `harkenjot_*` keys below). On first run it migrates any
+existing `localStorage` values into IndexedDB, after first honoring the legacy
+`marginalia_` → `harkenjot_` rename.
 
-| localStorage Key | Content |
-|-----------------|---------|
-| `harkenjot_sources` | All source objects (JSON) |
-| `harkenjot_notes` | All note objects (JSON) |
-| `harkenjot_positions` | Reading positions in articles/PDFs |
-| `harkenjot_media_positions` | Playback positions in media |
+| Key | localStorage fallback key | Content |
+|-----|---------------------------|---------|
+| `sources` | `harkenjot_sources` | All source objects (JSON) |
+| `notes` | `harkenjot_notes` | All note objects (JSON) |
+| `positions` | `harkenjot_positions` | Reading positions in articles/PDFs |
+| `media_positions` | `harkenjot_media_positions` | Playback positions in media |
 
 ### Speech Recognition
 
@@ -88,20 +99,23 @@ Two recognition systems with automatic fallback:
 | ReactDOM | 18 | React rendering |
 | Babel Standalone | latest | In-browser JSX transpilation |
 | PDF.js | 3.11.174 | PDF rendering and text extraction |
-| Transformers.js | 2.17.1 | Whisper AI speech recognition (loaded async) |
+| Transformers.js | 2.17.1 | Whisper AI speech recognition (loaded async via `import()` from jsDelivr only when the Whisper fallback is needed) |
+
+React, ReactDOM, Babel, and PDF.js load from `unpkg`/`cdnjs` in `<head>`; Transformers.js loads on demand from `cdn.jsdelivr.net`.
 
 ### External APIs Consumed
 
-- **CORS proxies** — `corsproxy.io`, `api.allorigins.win`, `api.codetabs.com` for fetching articles
-- **YouTube IFrame API** — Video playback
-- **Spotify oEmbed** — `open.spotify.com/oembed` for podcast metadata
-- **iTunes Search** — `itunes.apple.com/search` for podcast discovery
+- **CORS proxies** — `corsproxy.io`, `api.allorigins.win`, `api.codetabs.com` for fetching articles, RSS feeds, and oEmbed/scraped metadata
+- **YouTube** — IFrame API for playback; `youtube.com/oembed` for video metadata
+- **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
+- **X.com / Twitter oEmbed** — `publish.twitter.com/oembed` for embedding X.com videos and tweets
+- **iTunes Search** — `itunes.apple.com/search` for podcast discovery and cover art
 - **RSS feeds** — Custom parser for podcast episodes
 
 ### Browser APIs Used
 
 - Web Speech API, Web Audio API (speech recognition)
-- localStorage (persistence)
+- IndexedDB (primary persistence), localStorage (fallback)
 - Media Session API (hardware media controls)
 - Screen Wake Lock API (prevent sleep during playback)
 - Clipboard API (copy notes)
@@ -155,6 +169,9 @@ There are no linting or formatting tools configured.
 { id, type, title, url, content, date, ... }
 ```
 
+`type` is one of `article`, `text` (pasted), `youtube`, `podcast`, or `xvideo`
+(X.com/Twitter — itself either a `broadcast` or a `tweet` video).
+
 **Note object**:
 ```js
 { id, sourceId, text, position, timestamp, date, ... }
@@ -180,12 +197,13 @@ Notes reference their parent source via `sourceId`. Position anchoring differs b
 ### Common Modification Areas
 
 - **UI/Theme**: CSS variables in `:root` (around line 233)
-- **Icons**: `Icons` object (line 1780)
-- **Reader functionality**: `ReaderView` (line 2465)
-- **Media/podcast functionality**: `MediaView` (line 3923)
-- **Library/export**: `LibraryView` (line 5559)
-- **Notes panel**: `NoteSidebar` (line 5810)
-- **App-level state/routing**: `App` (line 2041)
+- **Icons**: `Icons` object (line 2124)
+- **Persistence**: `HJStore` IndexedDB module (line 2282)
+- **Reader functionality**: `ReaderView` (line 3620)
+- **Media/podcast/X.com functionality**: `MediaView` (line 5756)
+- **Library/export**: `LibraryView` (line 8570)
+- **Notes panel**: `NoteSidebar` (line 8885)
+- **App-level state/routing**: `App` (line 2664)
 
 ### Version
 
