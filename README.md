@@ -15,6 +15,15 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
 - **Single-File Deployment** — The entire application is one HTML file
 
+<img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" />
+
+<img width="1079" height="1799" alt="Screenshot_20260606_084243_Edge" src="https://github.com/user-attachments/assets/cd1512bb-76ca-4e36-8a6a-397a3b26bdf3" />
+
+<img width="1080" height="1800" alt="Screenshot_20260606_084259_Edge" src="https://github.com/user-attachments/assets/f6a8ffb1-edc5-4506-883e-c83caa3229ed" />
+
+<img width="1080" height="1800" alt="Screenshot_20260606_084322_Edge" src="https://github.com/user-attachments/assets/051e10a5-2bc9-466b-b8b2-c55ce6cb21bf" />
+
+
 ## Getting Started
 
 No installation or build step is required. Open `HarkenJot.html` in any modern browser:
