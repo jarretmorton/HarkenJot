@@ -2967,7 +2967,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.32.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.33.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4233,6 +4233,42 @@
         input.click();
       };
 
+      // WordPress REST API article fetch. WordPress sites (thenewstack.io
+      // and many others) expose <origin>/wp-json/wp/v2/posts?slug=<slug>,
+      // which returns clean article HTML — and the WP REST API echoes the
+      // request Origin in its CORS headers, so the browser can call it
+      // directly with no proxy and no bot-block in the way.
+      const tryWordPressApi = async (articleUrl) => {
+        try {
+          const u = new URL(articleUrl.startsWith('http') ? articleUrl : 'https://' + articleUrl);
+          const segments = u.pathname.split('/').filter(Boolean);
+          if (segments.length === 0) return null;
+          // WP post slugs are hyphenated words; skip files and odd paths
+          const slug = segments[segments.length - 1];
+          if (!/^[a-z0-9-]+$/i.test(slug)) return null;
+          const apiUrl = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+          const response = await fetch(apiUrl);
+          if (!response.ok) return null;
+          const posts = await response.json();
+          const post = Array.isArray(posts) ? posts[0] : null;
+          const bodyHtml = post?.content?.rendered || '';
+          if (!bodyHtml || bodyHtml.length < 100) return null;
+          const extracted = tryExtractArticle(`<html><body>${bodyHtml}</body></html>`);
+          if (!extracted) return null;
+          // title.rendered carries HTML entities (&#8217; etc.) — decode via DOM
+          let title = extracted.title;
+          if (post?.title?.rendered) {
+            const tmp = new DOMParser().parseFromString(post.title.rendered, 'text/html');
+            title = tmp.body.textContent.trim() || title;
+          }
+          console.log('[HJ:article] WordPress API success', { slug, title, chars: extracted.text.length });
+          return { title, text: extracted.text };
+        } catch (e) {
+          console.log('[HJ:article] WordPress API failed:', e?.message || e);
+          return null;
+        }
+      };
+
       const fetchContent = async () => {
         if (!url.trim()) return;
 
@@ -4559,6 +4595,33 @@
             console.log('Substack early path failed:', e.message);
           }
 
+          // Strategy 0.6: WordPress REST API early path for known WP news
+          // sites whose pages sit behind bot protection — the proxy chain
+          // gets challenge pages, but the CORS-enabled REST API works
+          // directly. (Other WP sites are still covered by the generic
+          // WordPress fallback further down.)
+          const wpEarlyDomains = ['thenewstack.io'];
+          try {
+            const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+            const host = u.hostname.replace(/^www\./, '');
+            if (wpEarlyDomains.some(d => host === d || host.endsWith('.' + d))) {
+              showToast('Trying WordPress API...');
+              const wp = await tryWordPressApi(url);
+              if (wp) {
+                const sentences = splitIntoSentences(wp.text);
+                sentencesRef.current = sentences;
+                addSource({ type: 'article', title: wp.title, url, content: wp.text });
+                setUrl('');
+                showToast('Article loaded successfully!');
+                setLoading(false);
+                return;
+              }
+              console.log('WordPress API early path failed, falling back to standard strategies');
+            }
+          } catch (e) {
+            console.log('WordPress early path error:', e.message);
+          }
+
           // For web articles, try multiple fetch strategies
           showToast('Fetching article content...');
 
@@ -4616,6 +4679,18 @@
               } catch (e) {
                 console.log('AMP version failed:', e.message);
               }
+            }
+          }
+
+          // Strategy 4: WordPress REST API. Many article sites are WordPress;
+          // its CORS-enabled API often succeeds where every proxy failed.
+          if (!extracted) {
+            console.log('Trying WordPress REST API...');
+            showToast('Trying WordPress API...');
+            const wp = await tryWordPressApi(url);
+            if (wp) {
+              extracted = wp;
+              console.log('WordPress REST API succeeded');
             }
           }
 
