@@ -2286,12 +2286,13 @@
       _ready: false,
       _dbName: 'harkenjot',
       _store: 'kv',
-      _keys: ['sources', 'notes', 'positions', 'media_positions'],
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
         positions: 'harkenjot_positions',
         media_positions: 'harkenjot_media_positions',
+        session: 'harkenjot_session',
       },
 
       _open() {
@@ -2661,12 +2662,26 @@
       }
     };
 
+    // Last-session restore: if the app was in use within this window, a fresh
+    // launch (e.g. from a home-screen shortcut) reopens the last source/tab
+    // instead of defaulting to the library. Mobile browsers kill backgrounded
+    // tabs silently, so recency is the proxy for "the app is already running".
+    const SESSION_RESTORE_WINDOW_MS = 2 * 60 * 60 * 1000;
+    function getRestorableSession() {
+      const s = HJStore.get('session');
+      if (!s || (s.tab !== 'reader' && s.tab !== 'media')) return null;
+      if (Date.now() - (s.ts || 0) > SESSION_RESTORE_WINDOW_MS) return null;
+      const source = (HJStore.get('sources') || []).find(x => x.id === s.sourceId);
+      return source ? { tab: s.tab, source } : null;
+    }
+
     // Main App
     function App() {
-      const [activeTab, setActiveTab] = useState('library');
       // HJStore.init() runs before ReactDOM.render, so the cache is already populated.
+      const [restoredSession] = useState(getRestorableSession);
+      const [activeTab, setActiveTab] = useState(restoredSession ? restoredSession.tab : 'library');
       const [sources, setSources] = useState(() => HJStore.get('sources') || []);
-      const [currentSource, setCurrentSource] = useState(null);
+      const [currentSource, setCurrentSource] = useState(restoredSession ? restoredSession.source : null);
       const [notes, setNotes] = useState(() => HJStore.get('notes') || []);
       // Global TTS voice preference (voiceURI string) — applies across all sources.
       // null means "auto" (use getBestVoice). Stored separately from per-source speed.
@@ -2689,9 +2704,12 @@
         history.pushState({ tab }, '');
       }, []);
 
-      // Set initial history state and listen for back/forward button
+      // Set initial history state and listen for back/forward button.
+      // When a session was restored, keep library as the base entry so the
+      // back button returns there (same shape as opening a source manually).
       useEffect(() => {
         history.replaceState({ tab: 'library' }, '');
+        if (restoredSession) history.pushState({ tab: restoredSession.tab }, '');
         const handlePopState = (event) => {
           setActiveTab(event.state?.tab || 'library');
         };
@@ -2738,6 +2756,25 @@
       useEffect(() => {
         HJStore.set('voice_uri', selectedVoiceURI).catch((e) => console.error('Failed to save voice preference:', e));
       }, [selectedVoiceURI]);
+
+      // Persist the last-visited tab/source for the next-launch session restore.
+      useEffect(() => {
+        HJStore.set('session', { tab: activeTab, sourceId: currentSource?.id ?? null, ts: Date.now() })
+          .catch((e) => console.error('Failed to save session:', e));
+      }, [activeTab, currentSource]);
+
+      // Re-stamp the session timestamp whenever the app goes to background —
+      // on mobile that's the real "last used" moment, since the OS can kill
+      // the tab afterwards without firing any further events.
+      useEffect(() => {
+        const handleVisibility = () => {
+          if (document.visibilityState !== 'hidden') return;
+          const s = HJStore.get('session');
+          if (s) HJStore.set('session', { ...s, ts: Date.now() }).catch(() => {});
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+      }, []);
 
       // Close sidebar when changing tabs
       useEffect(() => {
@@ -3014,7 +3051,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.35.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
