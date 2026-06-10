@@ -2132,6 +2132,7 @@
       Link: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
       Copy: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
       Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+      Recycle: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/><path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12"/><path d="m14 16-3 3 3 3"/><path d="M8.293 13.596 7.196 9.5 3.1 10.598"/><path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843"/><path d="m13.378 9.633 4.096 1.097 1.097-4.096"/></svg>,
       X: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
       Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
       StickyNote: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>,
@@ -2885,6 +2886,11 @@
           setSources(prev => [undoData.data.source, ...prev]);
           setNotes(prev => [...undoData.data.notes, ...prev]);
           showToast('Item restored');
+        } else if (undoData.type === 'sourceMove') {
+          const { sourceId, prevCreatedAt } = undoData.data;
+          setSources(prev => prev.map(s => s.id === sourceId ? { ...s, createdAt: prevCreatedAt } : s));
+          setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: prevCreatedAt } : prev);
+          showToast('Item moved back');
         }
 
         setUndoData(null);
@@ -2936,6 +2942,26 @@
         }, 5000);
       };
 
+      const moveSourceToToday = (sourceId) => {
+        const sourceToMove = sources.find(s => s.id === sourceId);
+        if (!sourceToMove) return;
+
+        const newCreatedAt = new Date().toISOString();
+        setSources(prev => prev.map(s => s.id === sourceId ? { ...s, createdAt: newCreatedAt } : s));
+        setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: newCreatedAt } : prev);
+
+        // Set up undo
+        clearTimeout(undoTimeoutRef.current);
+        setUndoData({ type: 'sourceMove', data: { sourceId, prevCreatedAt: sourceToMove.createdAt } });
+        setToast({ show: true, message: 'Item moved to today', showUndo: true });
+
+        // Auto-clear undo after 5 seconds
+        undoTimeoutRef.current = setTimeout(() => {
+          setUndoData(null);
+          setToast({ show: false, message: '', showUndo: false });
+        }, 5000);
+      };
+
       const currentNotes = notes.filter(n => n.sourceId === currentSource?.id).sort((a, b) => {
         // Sort notes sequentially by source position (earliest in source first)
         if (a.timestamp !== undefined && b.timestamp !== undefined) {
@@ -2967,7 +2993,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.34.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.35.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -3078,6 +3104,7 @@
                   }}
                   deleteNote={deleteNote}
                   deleteSource={deleteSource}
+                  moveSourceToToday={moveSourceToToday}
                   updateSource={updateSource}
                   setSources={setSources}
                   setNotes={setNotes}
@@ -8929,10 +8956,26 @@
     });
 
     // Library View Component
-    function LibraryView({ sources, notes, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, updateSource, setSources, setNotes, showToast }) {
+    function LibraryView({ sources, notes, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, setSources, setNotes, showToast }) {
       const [searchQuery, setSearchQuery] = React.useState('');
       const [searchOpen, setSearchOpen] = React.useState(false);
       const searchInputRef = React.useRef(null);
+      // Source pending a delete-or-move-to-today decision (recycle bin button)
+      const [actionSource, setActionSource] = React.useState(null);
+
+      const handleActionDelete = () => {
+        const source = actionSource;
+        setActionSource(null);
+        if (source && confirm('Delete this item and all its notes?')) {
+          deleteSource(source.id);
+        }
+      };
+
+      const handleActionMove = () => {
+        const source = actionSource;
+        setActionSource(null);
+        if (source) moveSourceToToday(source.id);
+      };
 
       const toggleSearch = () => {
         if (searchOpen) {
@@ -9214,13 +9257,11 @@
                             className="note-action-btn delete"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm('Delete this item and all its notes?')) {
-                                deleteSource(source.id);
-                              }
+                              setActionSource(source);
                             }}
-                            title="Delete item"
+                            title="Delete or move to today"
                           >
-                            <Icons.Trash />
+                            <Icons.Recycle />
                           </button>
                         </div>
                       </div>
@@ -9239,6 +9280,27 @@
               ))}
             </div>
           )}
+
+          <div className={`modal-overlay ${actionSource ? 'show' : ''}`} onClick={() => setActionSource(null)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <span className="modal-title">Delete or move?</span>
+                <button type="button" className="modal-close" onClick={() => setActionSource(null)}>&times;</button>
+              </div>
+              <div className="modal-body" style={{ padding: '1.5rem' }}>
+                <p style={{ fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word', margin: '0 0 1.25rem', fontSize: '1rem' }}>{actionSource?.title || ''}</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>Delete this item, or move it to today in the library?</p>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" style={{ color: 'var(--danger, #c00)' }} onClick={handleActionDelete}>
+                  <Icons.Trash /> Delete
+                </button>
+                <button type="button" className="btn btn-primary" onClick={handleActionMove}>
+                  Move to Today
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       );
     }
