@@ -2967,7 +2967,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.31.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.32.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6247,6 +6247,14 @@
         }
       };
 
+      // Several public CORS proxies hang instead of failing fast; cap each
+      // attempt so the fallback chain actually progresses.
+      const fetchWithTimeout = (url, ms = 8000) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), ms);
+        return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+      };
+
       // Fetch Spotify metadata using oEmbed API
       const fetchSpotifyMetadata = async (spotifyUrl) => {
         try {
@@ -6333,7 +6341,7 @@
         for (let i = 0; i < target.maxProxies; i++) {
           const label = `${target.kind}-scrape proxy ${i}`;
           try {
-            const response = await fetch(proxies[i](target.url));
+            const response = await fetchWithTimeout(proxies[i](target.url));
             if (!response.ok) {
               console.log(`[HJ:podcast] ${label}: http ${response.status}`);
               continue;
@@ -6550,7 +6558,8 @@
                     return {
                       feedUrl: bestResult.feedUrl,
                       podcastName: bestResult.collectionName,
-                      artworkUrl: bestResult.artworkUrl600 || bestResult.artworkUrl100
+                      artworkUrl: bestResult.artworkUrl600 || bestResult.artworkUrl100,
+                      collectionId: bestResult.collectionId
                     };
                   }
                   console.log('[HJ:podcast] iTunes episode search: best score', bestScore, 'below', MIN_EPISODE_SCORE, '— rejecting', bestResult?.collectionName);
@@ -6602,13 +6611,87 @@
             return {
               feedUrl: bestShow.feedUrl,
               podcastName: bestShow.collectionName,
-              artworkUrl: bestShow.artworkUrl600 || bestShow.artworkUrl100
+              artworkUrl: bestShow.artworkUrl600 || bestShow.artworkUrl100,
+              collectionId: bestShow.collectionId
             };
           }
           console.log('[HJ:podcast] iTunes show search: no result above threshold', { bestScore: bestShowScore, bestShow: bestShow?.collectionName, query: bestQuery });
           return null;
         } catch (error) {
           console.error('RSS search error:', error);
+          return null;
+        }
+      };
+
+      // Fallback for when the RSS feed itself is unreachable (every CORS
+      // proxy failed or the XML is broken): the iTunes Lookup API is CORS-
+      // enabled, so we can pull the podcast's recent episodes — including
+      // their audio URLs — directly, no proxy needed. Returns
+      // { episode, matchedByTitle, matchScore } shaped like
+      // parseRSSAndFindEpisode's episode, or null.
+      const fetchEpisodeFromITunes = async (collectionId, episodeTitle) => {
+        if (!collectionId) return null;
+        try {
+          const response = await fetch(`https://itunes.apple.com/lookup?id=${collectionId}&entity=podcastEpisode&limit=200`);
+          if (!response.ok) return null;
+          const data = await response.json();
+          const episodes = (data.results || []).filter(r => r.kind === 'podcast-episode' && r.episodeUrl);
+          if (episodes.length === 0) {
+            console.log('[HJ:podcast] iTunes lookup: no playable episodes for collection', collectionId);
+            return null;
+          }
+
+          const normalizeTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+          const targetTitle = normalizeTitle(episodeTitle || '');
+
+          // Same scoring as parseRSSAndFindEpisode: substring beats word overlap
+          let best = null;
+          let bestScore = 0;
+          if (targetTitle) {
+            for (const ep of episodes) {
+              const itemTitle = normalizeTitle(ep.trackName || '');
+              let score = 0;
+              const targetStripped = targetTitle.replace(/\s/g, '');
+              const itemStripped = itemTitle.replace(/\s/g, '');
+              if (itemStripped.includes(targetStripped) || targetStripped.includes(itemStripped)) {
+                score = 100;
+              } else {
+                targetTitle.split(/\s+/).forEach(word => {
+                  if (word.length > 3 && itemTitle.includes(word)) score += 10;
+                });
+              }
+              if (score > bestScore) {
+                bestScore = score;
+                best = ep;
+              }
+            }
+          } else {
+            // No title wanted → latest episode (lookup results are newest-first)
+            best = episodes[0];
+          }
+
+          if (!best) {
+            console.log('[HJ:podcast] iTunes lookup: no episode matched', { wanted: episodeTitle, episodes: episodes.length });
+            return null;
+          }
+
+          const matchedByTitle = !!episodeTitle && bestScore > 0;
+          console.log('[HJ:podcast] iTunes lookup fallback', { collectionId, episode: best.trackName, score: bestScore, matchedByTitle });
+          return {
+            episode: {
+              title: best.trackName || 'Unknown Episode',
+              audioUrl: best.episodeUrl,
+              description: best.description || best.shortDescription || '',
+              artworkUrl: best.artworkUrl600 || best.artworkUrl160 || best.artworkUrl60 || '',
+              channelTitle: best.collectionName || '',
+              pubDate: best.releaseDate || '',
+              link: best.trackViewUrl || ''
+            },
+            matchedByTitle,
+            matchScore: bestScore
+          };
+        } catch (e) {
+          console.log('[HJ:podcast] iTunes lookup failed:', e?.message || e);
           return null;
         }
       };
@@ -6688,7 +6771,7 @@
         for (let i = 0; i < fetchStrategies.length; i++) {
           const strategy = fetchStrategies[i];
           try {
-            const response = await fetch(strategy.build(feedUrl));
+            const response = await fetchWithTimeout(strategy.build(feedUrl));
             if (!response.ok) {
               console.log(`[HJ:podcast] fetch ${i} (${strategy.name}): http ${response.status}`);
               attemptOutcomes.push(`${strategy.name}:http${response.status}`);
@@ -6892,7 +6975,17 @@
             showToast(`Found feed: ${rssInfo.podcastName}`);
 
             // Latest episode (empty title -> first item with audio)
-            const result = await parseRSSAndFindEpisode(rssInfo.feedUrl, '');
+            let result = await parseRSSAndFindEpisode(rssInfo.feedUrl, '');
+
+            // Feed unreachable/broken → resolve latest episode via the
+            // CORS-enabled iTunes Lookup API instead
+            if (!result.ok && (result.reason === 'fetch_failed' || result.reason === 'parse_error')) {
+              const fallback = await fetchEpisodeFromITunes(rssInfo.collectionId, '');
+              if (fallback) {
+                result = { ok: true, episode: fallback.episode, matchedByTitle: fallback.matchedByTitle, matchScore: fallback.matchScore };
+              }
+            }
+
             if (!result.ok) {
               console.log('[HJ:podcast] show-branch failure', { feedUrl: rssInfo.feedUrl, reason: result.reason, detail: result.detail });
               if (result.reason === 'fetch_failed') {
@@ -6978,7 +7071,18 @@
           showToast(`Found feed: ${rssInfo.podcastName}`);
 
           // Step 3: Parse RSS and find episode
-          const result = await parseRSSAndFindEpisode(rssInfo.feedUrl, metadata.title);
+          let result = await parseRSSAndFindEpisode(rssInfo.feedUrl, metadata.title);
+
+          // Feed unreachable/broken → look the episode up via the CORS-
+          // enabled iTunes Lookup API instead. Only accept a confident title
+          // match here — an unmatched fallback would play the wrong episode.
+          if (!result.ok && (result.reason === 'fetch_failed' || result.reason === 'parse_error')) {
+            const fallback = await fetchEpisodeFromITunes(rssInfo.collectionId, metadata.title);
+            if (fallback && fallback.matchedByTitle) {
+              result = { ok: true, episode: fallback.episode, matchedByTitle: fallback.matchedByTitle, matchScore: fallback.matchScore };
+            }
+          }
+
           if (!result.ok) {
             console.log('[HJ:podcast] episode-branch failure', { feedUrl: rssInfo.feedUrl, reason: result.reason, detail: result.detail });
             if (result.reason === 'fetch_failed') {
