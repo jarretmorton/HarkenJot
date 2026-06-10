@@ -2967,7 +2967,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.31.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.31.2</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6290,11 +6290,14 @@
         }
       };
 
-      // Scrape the Spotify episode page for reliable show/episode metadata.
-      // Spotify's oEmbed often returns just the episode title, leaving us with
-      // no real show name to look up on iTunes. The episode page itself embeds
-      // JSON-LD with `partOfSeries.name` (the show) and `name` (the episode),
-      // which is far more reliable. Falls back to og:description parsing.
+      // Scrape Spotify pages for reliable show/episode metadata. Spotify's
+      // oEmbed often returns just the episode title, leaving us with no real
+      // show name to look up on iTunes. The /embed/ page is tried first: it
+      // carries episode + show names in a __NEXT_DATA__ JSON blob and is less
+      // aggressively bot-blocked than the main page, which often serves
+      // proxies a generic error/web-player page. The main page is the
+      // fallback: JSON-LD with `partOfSeries.name` (the show) and `name`
+      // (the episode), then og:tag parsing.
       const fetchSpotifyPageMetadata = async (spotifyUrl) => {
         const cleanUrl = cleanSpotifyUrl(spotifyUrl);
         const proxies = [
@@ -6304,12 +6307,35 @@
           (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`
         ];
 
+        // Bot-block/consent/web-player pages yield constant junk like
+        // "Spotify" or "Web Player: Musik für alle" — never real names.
+        // Feeding that junk to iTunes search silently loads a wrong podcast.
+        const isGarbageMeta = (s) => {
+          if (!s) return true;
+          const t = s.trim().toLowerCase();
+          return t === 'spotify' || t === 'web player' ||
+                 /^web player\b/.test(t) ||
+                 /music for everyone|musik f(ü|u)r alle/.test(t) ||
+                 /^spotify\s*[-–—|]/.test(t);
+        };
+
+        const embedUrl = /open\.spotify\.com\/(episode|show)\//i.test(cleanUrl)
+          ? cleanUrl.replace(/open\.spotify\.com\//i, 'open.spotify.com/embed/')
+          : null;
+        // Embed target only goes through the first few proxies to bound latency.
+        const targets = [
+          ...(embedUrl ? [{ url: embedUrl, kind: 'embed', maxProxies: 3 }] : []),
+          { url: cleanUrl, kind: 'page', maxProxies: proxies.length }
+        ];
+
         let bestResult = null;
-        for (let i = 0; i < proxies.length; i++) {
+        for (const target of targets) {
+        for (let i = 0; i < target.maxProxies; i++) {
+          const label = `${target.kind}-scrape proxy ${i}`;
           try {
-            const response = await fetch(proxies[i](cleanUrl));
+            const response = await fetch(proxies[i](target.url));
             if (!response.ok) {
-              console.log(`[HJ:podcast] page-scrape proxy ${i}: http ${response.status}`);
+              console.log(`[HJ:podcast] ${label}: http ${response.status}`);
               continue;
             }
             let html = await response.text();
@@ -6318,16 +6344,49 @@
               try { html = JSON.parse(html).contents || ''; } catch { html = ''; }
             }
             if (!html || html.length < 200) {
-              console.log(`[HJ:podcast] page-scrape proxy ${i}: short response (${html?.length || 0} bytes)`);
+              console.log(`[HJ:podcast] ${label}: short response (${html?.length || 0} bytes)`);
               continue;
             }
 
             const doc = new DOMParser().parseFromString(html, 'text/html');
+
+            if (target.kind === 'embed') {
+              const nextData = doc.querySelector('script#__NEXT_DATA__');
+              if (!nextData) {
+                console.log(`[HJ:podcast] ${label}: no __NEXT_DATA__`);
+                continue;
+              }
+              try {
+                const data = JSON.parse(nextData.textContent);
+                const entity = data?.props?.pageProps?.state?.data?.entity;
+                let episodeTitle = entity?.name || null;
+                // Episodes carry the show in subtitle/relatedEntityName;
+                // show pages have the show itself as `name`.
+                let showName = entity?.subtitle || entity?.relatedEntityName || null;
+                if (isGarbageMeta(episodeTitle)) episodeTitle = null;
+                if (isGarbageMeta(showName)) showName = null;
+                console.log(`[HJ:podcast] ${label}:`, { episodeTitle, showName });
+                if (episodeTitle && showName) return { episodeTitle, showName };
+                if ((episodeTitle || showName) && !bestResult) bestResult = { episodeTitle, showName };
+              } catch (e) {
+                console.log(`[HJ:podcast] ${label}: bad __NEXT_DATA__ JSON`);
+              }
+              continue;
+            }
+
             let episodeTitle = null;
             let showName = null;
 
             // JSON-LD: most reliable source
             const jsonLdScripts = doc.querySelectorAll('script[type="application/ld+json"]');
+
+            // No JSON-LD and no og:title → almost certainly a bot-block or
+            // error page whose <title> would only yield junk.
+            if (jsonLdScripts.length === 0 && !doc.querySelector('meta[property="og:title"]')) {
+              console.log(`[HJ:podcast] ${label}: bot-block/error page suspected`);
+              continue;
+            }
+
             for (const script of jsonLdScripts) {
               try {
                 const data = JSON.parse(script.textContent);
@@ -6395,12 +6454,22 @@
               }
             }
 
-            console.log(`[HJ:podcast] page-scrape proxy ${i}:`, { episodeTitle, showName });
+            // Discard junk extracted from bot-block/error pages
+            if (episodeTitle && isGarbageMeta(episodeTitle)) {
+              console.log(`[HJ:podcast] ${label}: rejected garbage episodeTitle`, episodeTitle);
+              episodeTitle = null;
+            }
+            if (showName && isGarbageMeta(showName)) {
+              console.log(`[HJ:podcast] ${label}: rejected garbage showName`, showName);
+              showName = null;
+            }
+
+            console.log(`[HJ:podcast] ${label}:`, { episodeTitle, showName });
 
             if (showName && episodeTitle) {
               return { episodeTitle, showName };
             }
-            // Track partial result; keep trying proxies in case a later one has both fields
+            // Track partial result; keep trying in case a later attempt has both fields
             if ((episodeTitle || showName) && !bestResult) {
               bestResult = { episodeTitle, showName };
             } else if (bestResult) {
@@ -6411,9 +6480,10 @@
               if (bestResult.episodeTitle && bestResult.showName) return bestResult;
             }
           } catch (e) {
-            console.log(`[HJ:podcast] page-scrape proxy ${i}: error ${e?.message || e}`);
+            console.log(`[HJ:podcast] ${label}: error ${e?.message || e}`);
             continue;
           }
+        }
         }
         console.log('[HJ:podcast] page-scrape final:', bestResult || 'no metadata');
         return bestResult;
@@ -6471,9 +6541,11 @@
                     }
                   }
 
-                  // Accept any feedUrl-bearing result if we matched at all, or even a
-                  // zero-score result when we have NO showName guidance — beats failing.
-                  if (bestResult && (bestScore > 0 || !showName)) {
+                  // Require a meaningful title match: exact (100) and substring
+                  // (80) always pass, word overlap needs ≥3 significant words.
+                  // Accepting weaker matches silently loads the wrong podcast.
+                  const MIN_EPISODE_SCORE = 30;
+                  if (bestResult && bestScore >= MIN_EPISODE_SCORE) {
                     console.log('[HJ:podcast] iTunes episode search match', { score: bestScore, show: bestResult.collectionName, feedUrl: bestResult.feedUrl });
                     return {
                       feedUrl: bestResult.feedUrl,
@@ -6481,6 +6553,7 @@
                       artworkUrl: bestResult.artworkUrl600 || bestResult.artworkUrl100
                     };
                   }
+                  console.log('[HJ:podcast] iTunes episode search: best score', bestScore, 'below', MIN_EPISODE_SCORE, '— rejecting', bestResult?.collectionName);
                 }
               }
             } catch (e) {
@@ -6488,26 +6561,51 @@
             }
           }
 
-          // Strategy 2: Search by each show-name candidate (fallback)
-          // TODO(v1.29): score results against showName before picking — currently
-          // returns results[0] blindly, which silently picks the wrong podcast for
-          // shows with common-sounding names.
+          // Strategy 2: Search by each show-name candidate (fallback).
+          // Score results against the candidate instead of trusting iTunes'
+          // ranking — results[0] is often a different podcast for
+          // common-sounding or garbled show names.
+          let bestShow = null;
+          let bestShowScore = 0;
+          let bestQuery = null;
           for (const candidate of showCandidates) {
             try {
               const searchQuery = encodeURIComponent(candidate);
               const response = await fetch(`https://itunes.apple.com/search?term=${searchQuery}&media=podcast&limit=5`);
               if (!response.ok) continue;
               const data = await response.json();
-              if (data.results && data.results.length > 0) {
-                console.log('[HJ:podcast] iTunes show search match', { query: candidate, show: data.results[0].collectionName, feedUrl: data.results[0].feedUrl });
-                return {
-                  feedUrl: data.results[0].feedUrl,
-                  podcastName: data.results[0].collectionName,
-                  artworkUrl: data.results[0].artworkUrl600 || data.results[0].artworkUrl100
-                };
+              const candNorm = normalizeForMatch(candidate);
+              if (!candNorm) continue; // empty after normalization would substring-match anything
+              for (const r of (data.results || [])) {
+                if (!r.feedUrl) continue;
+                const collNorm = normalizeForMatch(r.collectionName || '');
+                let score = 0;
+                if (collNorm && collNorm === candNorm) score = 100;
+                else if (collNorm && (collNorm.includes(candNorm) || candNorm.includes(collNorm))) score = 80;
+                else {
+                  const words = candNorm.split(/\s+/).filter(w => w.length > 3);
+                  const matched = words.filter(w => collNorm.includes(w)).length;
+                  if (words.length > 0) score = Math.round((matched / words.length) * 70);
+                }
+                if (score > bestShowScore) {
+                  bestShowScore = score;
+                  bestShow = r;
+                  bestQuery = candidate;
+                }
               }
             } catch (e) { continue; }
+            if (bestShowScore >= 80) break; // exact/substring — stop trying weaker candidates
           }
+          const MIN_SHOW_SCORE = 50; // exact, substring, or strong word overlap
+          if (bestShow && bestShowScore >= MIN_SHOW_SCORE) {
+            console.log('[HJ:podcast] iTunes show search match', { query: bestQuery, score: bestShowScore, show: bestShow.collectionName, feedUrl: bestShow.feedUrl });
+            return {
+              feedUrl: bestShow.feedUrl,
+              podcastName: bestShow.collectionName,
+              artworkUrl: bestShow.artworkUrl600 || bestShow.artworkUrl100
+            };
+          }
+          console.log('[HJ:podcast] iTunes show search: no result above threshold', { bestScore: bestShowScore, bestShow: bestShow?.collectionName, query: bestQuery });
           return null;
         } catch (error) {
           console.error('RSS search error:', error);
@@ -6559,7 +6657,8 @@
       // Parse RSS feed and find episode
       const parseRSSAndFindEpisode = async (feedUrl, episodeTitle) => {
         // Returns:
-        //   { ok: true, episode: {...} }                                 — success (incl. fallback to first audio item)
+        //   { ok: true, episode: {...}, matchedByTitle, matchScore }     — success; matchedByTitle is false
+        //     when episodeTitle was empty OR nothing matched (first audio item returned instead)
         //   { ok: false, reason: 'fetch_failed'|'parse_error'|'no_audio_items', detail }
         //
         // Try direct fetch first (some feeds support CORS), then CORS proxies.
@@ -6726,14 +6825,15 @@
           // Count audio-bearing items for diagnostics
           let audioCount = 0;
           items.forEach(item => { if (getAudioUrl(item)) audioCount++; });
-          console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}`);
+          const matchedByTitle = !!episodeTitle && bestScore > 0;
+          console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
 
           if (!bestMatch) {
             console.error(`[HJ:podcast] feed parsed but no episodes with audio found (${items.length} items)`);
             return { ok: false, reason: 'no_audio_items', detail: `${items.length} items, 0 with audio` };
           }
 
-          return { ok: true, episode: bestMatch };
+          return { ok: true, episode: bestMatch, matchedByTitle, matchScore: bestScore };
         } catch (error) {
           console.error('[HJ:podcast] RSS parse error:', error);
           return { ok: false, reason: 'parse_error', detail: error?.message || 'unknown parse error' };
@@ -6894,6 +6994,18 @@
             return;
           }
           const episode = result.episode;
+
+          // The episode wasn't found in the feed — the feed is likely the
+          // wrong podcast entirely. Loading its first item would silently
+          // play an unrelated episode, so refuse and let the user verify.
+          if (metadata.title && !result.matchedByTitle) {
+            console.log('[HJ:podcast] episode not found in feed — refusing first-item fallback', {
+              feedUrl: rssInfo.feedUrl, wanted: metadata.title, firstItem: episode.title, score: result.matchScore });
+            setUrl(rssInfo.feedUrl);
+            showToast(`Couldn't confidently match this episode in "${rssInfo.podcastName}" — feed URL pasted, try loading directly`);
+            setIsLoadingPodcast(false);
+            return;
+          }
 
           // Success! Load the audio
           setVideoId(null);
