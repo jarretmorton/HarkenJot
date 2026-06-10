@@ -2883,12 +2883,25 @@
           setNotes(prev => [undoData.data, ...prev]);
           showToast('Note restored');
         } else if (undoData.type === 'source') {
-          setSources(prev => [undoData.data.source, ...prev]);
-          setNotes(prev => [...undoData.data.notes, ...prev]);
+          // Re-insert at the original array index so the library's date-group
+          // ordering (driven by array order) is preserved
+          const { source, notes: restoredNotes, index } = undoData.data;
+          setSources(prev => {
+            const arr = prev.filter(s => s.id !== source.id);
+            arr.splice(Math.min(index ?? 0, arr.length), 0, source);
+            return arr;
+          });
+          setNotes(prev => [...restoredNotes, ...prev]);
           showToast('Item restored');
         } else if (undoData.type === 'sourceMove') {
-          const { sourceId, prevCreatedAt } = undoData.data;
-          setSources(prev => prev.map(s => s.id === sourceId ? { ...s, createdAt: prevCreatedAt } : s));
+          const { sourceId, prevCreatedAt, prevIndex } = undoData.data;
+          setSources(prev => {
+            const moved = prev.find(s => s.id === sourceId);
+            if (!moved) return prev;
+            const arr = prev.filter(s => s.id !== sourceId);
+            arr.splice(Math.min(prevIndex ?? 0, arr.length), 0, { ...moved, createdAt: prevCreatedAt });
+            return arr;
+          });
           setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: prevCreatedAt } : prev);
           showToast('Item moved back');
         }
@@ -2919,8 +2932,9 @@
       };
 
       const deleteSource = (sourceId) => {
-        const sourceToDelete = sources.find(s => s.id === sourceId);
-        if (!sourceToDelete) return;
+        const sourceIndex = sources.findIndex(s => s.id === sourceId);
+        if (sourceIndex === -1) return;
+        const sourceToDelete = sources[sourceIndex];
 
         const relatedNotes = notes.filter(n => n.sourceId === sourceId);
 
@@ -2932,7 +2946,7 @@
 
         // Set up undo
         clearTimeout(undoTimeoutRef.current);
-        setUndoData({ type: 'source', data: { source: sourceToDelete, notes: relatedNotes } });
+        setUndoData({ type: 'source', data: { source: sourceToDelete, notes: relatedNotes, index: sourceIndex } });
         setToast({ show: true, message: 'Item deleted from library', showUndo: true });
 
         // Auto-clear undo after 5 seconds
@@ -2943,16 +2957,23 @@
       };
 
       const moveSourceToToday = (sourceId) => {
-        const sourceToMove = sources.find(s => s.id === sourceId);
-        if (!sourceToMove) return;
+        const sourceIndex = sources.findIndex(s => s.id === sourceId);
+        if (sourceIndex === -1) return;
+        const sourceToMove = sources[sourceIndex];
 
         const newCreatedAt = new Date().toISOString();
-        setSources(prev => prev.map(s => s.id === sourceId ? { ...s, createdAt: newCreatedAt } : s));
+        // Move to the front of the array so it appears at the top of today's
+        // group, matching where a newly added source would land
+        setSources(prev => {
+          const moved = prev.find(s => s.id === sourceId);
+          if (!moved) return prev;
+          return [{ ...moved, createdAt: newCreatedAt }, ...prev.filter(s => s.id !== sourceId)];
+        });
         setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: newCreatedAt } : prev);
 
         // Set up undo
         clearTimeout(undoTimeoutRef.current);
-        setUndoData({ type: 'sourceMove', data: { sourceId, prevCreatedAt: sourceToMove.createdAt } });
+        setUndoData({ type: 'sourceMove', data: { sourceId, prevCreatedAt: sourceToMove.createdAt, prevIndex: sourceIndex } });
         setToast({ show: true, message: 'Item moved to today', showUndo: true });
 
         // Auto-clear undo after 5 seconds
@@ -2993,7 +3014,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.35.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.35.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
