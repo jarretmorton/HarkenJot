@@ -2400,6 +2400,19 @@
 
       get(key) { return this._cache[key]; },
 
+      // Re-read a key from IndexedDB into the cache. Needed when another
+      // instance of the app may have written the key after this page's
+      // init() hydration (e.g. a background-preloaded tab catching up on
+      // the session saved by the tab the user was actually using).
+      async refresh(key) {
+        if (!this._db) return this._cache[key];
+        try {
+          const v = await this._idbGet(key);
+          if (v !== undefined) this._cache[key] = v;
+        } catch (e) { /* keep cached value */ }
+        return this._cache[key];
+      },
+
       // Update the cache immediately and fire an async write to IDB. Returns
       // a promise so callers can await persistence if needed.
       set(key, value) {
@@ -2678,7 +2691,13 @@
     // Main App
     function App() {
       // HJStore.init() runs before ReactDOM.render, so the cache is already populated.
-      const [restoredSession] = useState(getRestorableSession);
+      // Pages booted in the background (visibilityState 'hidden' at load — e.g.
+      // Edge/Chrome Android tab preload or startup boost) must not consume the
+      // saved session yet; for those the restore is deferred until first shown.
+      const [restoredSession] = useState(() => (document.visibilityState === 'visible' ? getRestorableSession() : null));
+      // Session record as it was at boot, captured before the persist effect
+      // below overwrites it — used by the resume diagnostics toast.
+      const [bootSession] = useState(() => HJStore.get('session'));
       const [activeTab, setActiveTab] = useState(restoredSession ? restoredSession.tab : 'library');
       const [sources, setSources] = useState(() => HJStore.get('sources') || []);
       const [currentSource, setCurrentSource] = useState(restoredSession ? restoredSession.source : null);
@@ -2757,23 +2776,57 @@
         HJStore.set('voice_uri', selectedVoiceURI).catch((e) => console.error('Failed to save voice preference:', e));
       }, [selectedVoiceURI]);
 
+      // Mirror of the nav state for the visibility/pagehide handlers below.
+      // hasBeenVisibleRef gates ALL session writes: a page preloaded in the
+      // background must never clobber the session saved by the tab the user
+      // was actually using.
+      const sessionStateRef = useRef({ tab: activeTab, sourceId: currentSource?.id ?? null });
+      const hasBeenVisibleRef = useRef(document.visibilityState === 'visible');
+
       // Persist the last-visited tab/source for the next-launch session restore.
       useEffect(() => {
-        HJStore.set('session', { tab: activeTab, sourceId: currentSource?.id ?? null, ts: Date.now() })
+        sessionStateRef.current = { tab: activeTab, sourceId: currentSource?.id ?? null };
+        if (!hasBeenVisibleRef.current) return;
+        HJStore.set('session', { ...sessionStateRef.current, ts: Date.now() })
           .catch((e) => console.error('Failed to save session:', e));
       }, [activeTab, currentSource]);
 
-      // Re-stamp the session timestamp whenever the app goes to background —
-      // on mobile that's the real "last used" moment, since the OS can kill
-      // the tab afterwards without firing any further events.
+      // Re-stamp the session whenever the app goes to background — on mobile
+      // that's the real "last used" moment, since the OS can kill the tab
+      // afterwards without firing any further events. pagehide covers
+      // tab close / navigation away. And when a page that was preloaded
+      // hidden is first shown, run the deferred session restore against the
+      // session as it exists NOW (not as it was at preload time).
       useEffect(() => {
-        const handleVisibility = () => {
-          if (document.visibilityState !== 'hidden') return;
-          const s = HJStore.get('session');
-          if (s) HJStore.set('session', { ...s, ts: Date.now() }).catch(() => {});
+        const stampSession = () => {
+          HJStore.set('session', { ...sessionStateRef.current, ts: Date.now() }).catch(() => {});
         };
+        const handleVisibility = () => {
+          if (document.visibilityState === 'visible' && !hasBeenVisibleRef.current) {
+            hasBeenVisibleRef.current = true;
+            // Another tab may have saved a newer session since this page was
+            // preloaded — re-read from IDB before deciding what to restore.
+            HJStore.refresh('session').then(() => {
+              const s = getRestorableSession();
+              if (s && sessionStateRef.current.sourceId == null && sessionStateRef.current.tab === 'library') {
+                setCurrentSource(s.source);
+                setActiveTab(s.tab);
+                history.pushState({ tab: s.tab }, '');
+                return; // the persist effect above writes the restored state
+              }
+              stampSession();
+            });
+          } else if (document.visibilityState === 'hidden' && hasBeenVisibleRef.current) {
+            stampSession();
+          }
+        };
+        const handlePageHide = () => { if (hasBeenVisibleRef.current) stampSession(); };
         document.addEventListener('visibilitychange', handleVisibility);
-        return () => document.removeEventListener('visibilitychange', handleVisibility);
+        window.addEventListener('pagehide', handlePageHide);
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisibility);
+          window.removeEventListener('pagehide', handlePageHide);
+        };
       }, []);
 
       // Close sidebar when changing tabs
@@ -2798,6 +2851,26 @@
         setToast({ show: true, message });
         setTimeout(() => setToast({ show: false, message: '' }), 3000);
       };
+
+      // Temporary resume diagnostics (v1.36.1): when the app opens at the
+      // Library on a visible launch even though a session record exists,
+      // explain why it wasn't restored. Remove once resume is confirmed
+      // working on-device.
+      useEffect(() => {
+        if (restoredSession || !hasBeenVisibleRef.current) return;
+        const s = bootSession;
+        if (s === undefined) return; // genuinely first run — nothing to explain
+        let reason;
+        if (!s || typeof s !== 'object') reason = 'saved session was unreadable';
+        else if (s.tab === 'library') reason = 'last session ended at Library';
+        else if (Date.now() - (s.ts || 0) > SESSION_RESTORE_WINDOW_MS) {
+          const hours = ((Date.now() - (s.ts || 0)) / 3600000).toFixed(1);
+          reason = `last session was ${hours}h ago`;
+        }
+        else if (!(HJStore.get('sources') || []).some(x => x.id === s.sourceId)) reason = 'last source no longer in library';
+        else reason = 'unexpected session state: ' + JSON.stringify({ tab: s.tab, sourceId: s.sourceId });
+        showToast(`Resume debug: starting at Library — ${reason}`);
+      }, []);
 
       const addSource = (source) => {
         const newSource = { ...source, id: generateId(), createdAt: new Date().toISOString() };
@@ -3051,7 +3124,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
