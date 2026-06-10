@@ -2967,7 +2967,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.33.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.34.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4233,42 +4233,6 @@
         input.click();
       };
 
-      // WordPress REST API article fetch. WordPress sites (thenewstack.io
-      // and many others) expose <origin>/wp-json/wp/v2/posts?slug=<slug>,
-      // which returns clean article HTML — and the WP REST API echoes the
-      // request Origin in its CORS headers, so the browser can call it
-      // directly with no proxy and no bot-block in the way.
-      const tryWordPressApi = async (articleUrl) => {
-        try {
-          const u = new URL(articleUrl.startsWith('http') ? articleUrl : 'https://' + articleUrl);
-          const segments = u.pathname.split('/').filter(Boolean);
-          if (segments.length === 0) return null;
-          // WP post slugs are hyphenated words; skip files and odd paths
-          const slug = segments[segments.length - 1];
-          if (!/^[a-z0-9-]+$/i.test(slug)) return null;
-          const apiUrl = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
-          const response = await fetch(apiUrl);
-          if (!response.ok) return null;
-          const posts = await response.json();
-          const post = Array.isArray(posts) ? posts[0] : null;
-          const bodyHtml = post?.content?.rendered || '';
-          if (!bodyHtml || bodyHtml.length < 100) return null;
-          const extracted = tryExtractArticle(`<html><body>${bodyHtml}</body></html>`);
-          if (!extracted) return null;
-          // title.rendered carries HTML entities (&#8217; etc.) — decode via DOM
-          let title = extracted.title;
-          if (post?.title?.rendered) {
-            const tmp = new DOMParser().parseFromString(post.title.rendered, 'text/html');
-            title = tmp.body.textContent.trim() || title;
-          }
-          console.log('[HJ:article] WordPress API success', { slug, title, chars: extracted.text.length });
-          return { title, text: extracted.text };
-        } catch (e) {
-          console.log('[HJ:article] WordPress API failed:', e?.message || e);
-          return null;
-        }
-      };
-
       const fetchContent = async () => {
         if (!url.trim()) return;
 
@@ -4462,6 +4426,99 @@
             return result.text.length >= 100 ? result : null;
           };
 
+          // Helper: WordPress REST API article fetch. WordPress sites
+          // (thenewstack.io and many others) expose
+          // <origin>/wp-json/wp/v2/posts?slug=<slug> with clean article HTML.
+          // Tried directly first (the WP REST API echoes the request Origin
+          // in its CORS headers), then through the proxy chain — WAFs that
+          // challenge cross-origin browser calls often allow proxied
+          // server-to-server fetches of API routes.
+          const tryWordPressApi = async (articleUrl) => {
+            try {
+              const u = new URL(articleUrl.startsWith('http') ? articleUrl : 'https://' + articleUrl);
+              const segments = u.pathname.split('/').filter(Boolean);
+              if (segments.length === 0) return null;
+              // WP post slugs are hyphenated words; skip files and odd paths
+              const slug = segments[segments.length - 1];
+              if (!/^[a-z0-9-]+$/i.test(slug)) return null;
+              const apiUrl = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+
+              let raw = null;
+              try {
+                const response = await fetch(apiUrl);
+                if (response.ok) raw = await response.text();
+                else console.log(`[HJ:article] WordPress API direct: http ${response.status}`);
+              } catch (e) {
+                console.log('[HJ:article] WordPress API direct failed:', e?.message || e);
+              }
+              if (!raw) raw = await fetchHtmlViaProxies(apiUrl);
+              if (!raw) return null;
+
+              let posts;
+              try { posts = JSON.parse(raw); } catch {
+                console.log('[HJ:article] WordPress API returned non-JSON');
+                return null;
+              }
+              const post = Array.isArray(posts) ? posts[0] : null;
+              const bodyHtml = post?.content?.rendered || '';
+              if (!bodyHtml || bodyHtml.length < 100) {
+                console.log('[HJ:article] WordPress API: no post content', { slug, posts: Array.isArray(posts) ? posts.length : typeof posts });
+                return null;
+              }
+              const extracted = tryExtractArticle(`<html><body>${bodyHtml}</body></html>`);
+              if (!extracted) return null;
+              // title.rendered carries HTML entities (&#8217; etc.) — decode via DOM
+              let title = extracted.title;
+              if (post?.title?.rendered) {
+                const tmp = new DOMParser().parseFromString(post.title.rendered, 'text/html');
+                title = tmp.body.textContent.trim() || title;
+              }
+              console.log('[HJ:article] WordPress API success', { slug, title, chars: extracted.text.length });
+              return { title, text: extracted.text };
+            } catch (e) {
+              console.log('[HJ:article] WordPress API failed:', e?.message || e);
+              return null;
+            }
+          };
+
+          // Helper: Jina Reader fallback (https://r.jina.ai/<url>). CORS-
+          // enabled, no key needed at light usage, and built to return clean
+          // article text from pages that bot-block every other route.
+          const tryJinaReader = async (articleUrl) => {
+            try {
+              const target = articleUrl.startsWith('http') ? articleUrl : 'https://' + articleUrl;
+              const response = await fetch(`https://r.jina.ai/${target}`);
+              if (!response.ok) {
+                console.log(`[HJ:article] Jina reader: http ${response.status}`);
+                return null;
+              }
+              const text = await response.text();
+              // Response shape: "Title: ...\nURL Source: ...\nMarkdown Content:\n..."
+              const titleMatch = text.match(/^Title:\s*(.+)$/m);
+              const contentIdx = text.indexOf('Markdown Content:');
+              let body = contentIdx >= 0 ? text.slice(contentIdx + 'Markdown Content:'.length) : text;
+              // Light markdown cleanup: drop images, unwrap links, strip heading/emphasis markers
+              body = body
+                .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+                .replace(/^#{1,6}\s+/gm, '')
+                .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1')
+                .replace(/^[-=*]{3,}\s*$/gm, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              if (body.length < 200) {
+                console.log(`[HJ:article] Jina reader: too short (${body.length} chars)`);
+                return null;
+              }
+              const title = titleMatch ? titleMatch[1].trim() : 'Untitled Article';
+              console.log('[HJ:article] Jina reader success', { title, chars: body.length });
+              return { title, text: body };
+            } catch (e) {
+              console.log('[HJ:article] Jina reader failed:', e?.message || e);
+              return null;
+            }
+          };
+
           // Strategy 0: ForumMagnum GraphQL API (LessWrong, Alignment Forum, EA Forum)
           // These sites block CORS proxy requests with 403, but expose a public GraphQL API
           // that returns clean post HTML via their /graphql endpoint.
@@ -4601,6 +4658,7 @@
           // directly. (Other WP sites are still covered by the generic
           // WordPress fallback further down.)
           const wpEarlyDomains = ['thenewstack.io'];
+          let wpApiAlreadyFailed = false;
           try {
             const u = new URL(url.startsWith('http') ? url : 'https://' + url);
             const host = u.hostname.replace(/^www\./, '');
@@ -4616,6 +4674,7 @@
                 setLoading(false);
                 return;
               }
+              wpApiAlreadyFailed = true;
               console.log('WordPress API early path failed, falling back to standard strategies');
             }
           } catch (e) {
@@ -4684,13 +4743,25 @@
 
           // Strategy 4: WordPress REST API. Many article sites are WordPress;
           // its CORS-enabled API often succeeds where every proxy failed.
-          if (!extracted) {
+          if (!extracted && !wpApiAlreadyFailed) {
             console.log('Trying WordPress REST API...');
             showToast('Trying WordPress API...');
             const wp = await tryWordPressApi(url);
             if (wp) {
               extracted = wp;
               console.log('WordPress REST API succeeded');
+            }
+          }
+
+          // Strategy 5: Jina Reader — handles bot-protected pages (Cloudflare
+          // etc.) that defeat the proxies, archive.org, AMP, and site APIs.
+          if (!extracted) {
+            console.log('Trying Jina reader...');
+            showToast('Trying reader service...');
+            const jina = await tryJinaReader(url);
+            if (jina) {
+              extracted = jina;
+              console.log('Jina reader succeeded');
             }
           }
 
