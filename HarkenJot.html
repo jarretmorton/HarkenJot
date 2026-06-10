@@ -2723,9 +2723,6 @@
       // Edge/Chrome Android tab preload or startup boost) must not consume the
       // saved session yet; for those the restore is deferred until first shown.
       const [restoredSession] = useState(() => (document.visibilityState === 'visible' ? getRestorableSession() : null));
-      // Session record as it was at boot, captured before the persist effect
-      // below overwrites it — used by the resume diagnostics toast.
-      const [bootSession] = useState(() => HJStore.get('session'));
       const [activeTab, setActiveTab] = useState(restoredSession ? restoredSession.tab : 'library');
       const [sources, setSources] = useState(() => HJStore.get('sources') || []);
       const [currentSource, setCurrentSource] = useState(restoredSession ? restoredSession.source : null);
@@ -2890,24 +2887,6 @@
         setToast({ show: true, message });
         setTimeout(() => setToast({ show: false, message: '' }), 3000);
       };
-
-      // Temporary resume diagnostics: when the app opens at the
-      // Library on a visible launch even though a session record exists,
-      // explain why it wasn't restored. Remove once resume is confirmed
-      // working on-device.
-      useEffect(() => {
-        if (restoredSession || !hasBeenVisibleRef.current) return;
-        const s = bootSession;
-        if (s === undefined) return; // genuinely first run — nothing to explain
-        let reason;
-        const ageH = ((Date.now() - ((s && s.ts) || 0)) / 3600000).toFixed(1);
-        if (!s || typeof s !== 'object') reason = 'saved session was unreadable';
-        else if (s.tab === 'library') reason = `last session ended at Library ${ageH}h ago`;
-        else if (Date.now() - (s.ts || 0) > SESSION_RESTORE_WINDOW_MS) reason = `last session was ${ageH}h ago`;
-        else if (!(HJStore.get('sources') || []).some(x => x.id === s.sourceId)) reason = 'last source no longer in library';
-        else reason = 'unexpected session state: ' + JSON.stringify({ tab: s.tab, sourceId: s.sourceId });
-        showToast(`Resume debug: starting at Library — ${reason}`);
-      }, []);
 
       const addSource = (source) => {
         const newSource = { ...source, id: generateId(), createdAt: new Date().toISOString() };
@@ -3161,7 +3140,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.3</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
