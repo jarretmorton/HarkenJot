@@ -2286,13 +2286,14 @@
       _ready: false,
       _dbName: 'harkenjot',
       _store: 'kv',
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session'],
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
         positions: 'harkenjot_positions',
         media_positions: 'harkenjot_media_positions',
         session: 'harkenjot_session',
+        voice_uri: 'harkenjot_voice_uri',
       },
 
       _open() {
@@ -3140,7 +3141,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.3</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.4</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>

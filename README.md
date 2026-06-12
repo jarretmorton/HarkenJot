@@ -7,7 +7,8 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 ## Features
 
 - **Voice Notes** — Record voice notes with automatic speech-to-text via Web Speech API (primary) or Whisper AI (offline fallback)
-- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, and X.com/Twitter videos in a single interface
+- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, and local audio files in a single interface
+- **NotebookLM Integration** — Play NotebookLM podcast exports as local audio, link them back to their notebook URL, and jump to NotebookLM from any article
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
 - **Library Management** — Browse, search, export, and import your notes and sources
@@ -49,16 +50,17 @@ HarkenJot has three main views:
 | Tab | Purpose |
 |-----|---------|
 | **Reader** | Load articles (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
-| **Media** | Play YouTube videos, podcasts (via RSS/audio URL), or X.com/Twitter videos. Take voice or text notes anchored to the playback timestamp. |
-| **Library** | Browse all saved sources and notes. Search, edit, export to JSON, or copy notes to clipboard. |
+| **Media** | Play YouTube videos, podcasts (via RSS/audio URL), X.com/Twitter videos, or local audio files (e.g. NotebookLM podcast exports). Take voice or text notes anchored to the playback timestamp. |
+| **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
 
 ## Tech Stack
 
-- **React 18** — UI components (loaded via CDN)
+- **React 18 + ReactDOM 18** — UI components and rendering (loaded via CDN)
 - **Babel Standalone** — In-browser JSX transpilation
 - **PDF.js** — PDF rendering and text extraction
 - **Transformers.js** — Local Whisper AI speech recognition
 - **Web Speech API** — Primary browser-native speech recognition
+- **speechSynthesis** — Browser-native text-to-speech for the reader
 - **Web Audio API** — Audio processing for Whisper
 - **IndexedDB** — Client-side data persistence (localStorage fallback)
 
@@ -68,7 +70,7 @@ All dependencies are loaded from CDN at runtime. There are no build tools, bundl
 
 Upload `HarkenJot.html` to any static file host:
 
-- **GitHub Pages** — Push to a `gh-pages` branch
+- **GitHub Pages** — Serve the repo root from the default branch (the `.nojekyll` file disables Jekyll processing)
 - **Netlify / Vercel** — Drop the file into a project
 - **S3 + CloudFront** — Upload to a bucket with static hosting enabled
 - **Any web server** — Copy the file to your server's document root

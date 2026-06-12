@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~9,000 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
+HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~9,700 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
 
 ## Architecture
 
@@ -16,6 +16,8 @@ Everything — HTML, CSS, and JavaScript (React/JSX) — is in one file: `Harken
 HarkenJot.html   # The entire application
 README.md        # Project documentation
 CLAUDE.md        # This file
+NotebookLM.png   # NotebookLM logo asset (not referenced by the app or README)
+.nojekyll        # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 ```
 
 ### Key Sections in HarkenJot.html
@@ -24,25 +26,26 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 
 | Line Range | Section |
 |------------|---------|
-| 1–11 | Head, CDN script imports (React 18, ReactDOM 18, Babel, PDF.js) |
-| 14–58 | `webSpeechAPI` — Browser-native speech recognition module |
-| 60–230 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
+| 1–10 | Head, CDN script imports (React 18, ReactDOM 18, Babel, PDF.js) |
+| 14–57 | `webSpeechAPI` — Browser-native speech recognition module |
+| 62–227 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
 | 231 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
 | 232–2115 | `<style>` — All CSS, including CSS variables for theming |
 | 2121 | React hooks imports |
-| 2124–2164 | `Icons` — SVG icon components |
-| 2165–2186 | Utility functions (`generateId`, `safeHostname`, `formatTime`, etc.) |
-| 2282–2458 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
-| 2327–2333 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 2459–2522 | `Toast` — Notification component with undo support |
-| 2524–2663 | `MediaSessionManager` — Browser Media Session API integration |
-| 2664–3112 | `App` — Root component, state management, tab routing |
-| 3113–3619 | `EditableTitle` — Inline title editing component |
-| 3620–5755 | `ReaderView` — Article/PDF reader with TTS and voice notes |
-| 5756–8569 | `MediaView` — YouTube / podcast / X.com video player with timestamped notes |
-| 8570–8884 | `LibraryView` — Source and note management, import/export |
-| 8885–9086 | `NoteSidebar` — Notes display, editing, and navigation |
-| 9087 | `ReactDOM.createRoot` render call |
+| 2124–2163 | `Icons` — SVG icon components |
+| 2166–2282 | Utility functions (`generateId`, `safeHostname`, `formatTime`, NotebookLM filename↔title matching, etc.) |
+| 2283–2453 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 2330–2339 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 2503–2566 | `Toast` — Notification component with undo support |
+| 2568–2705 | `MediaSessionManager` — Browser Media Session API integration |
+| 2721–3285 | `App` — Root component, state management, tab routing |
+| 3288–3385 | `EditableTitle` — Inline title editing component |
+| 3387–3793 | `NotebookLMModal` — Modal for tagging local audio as a NotebookLM podcast and linking its notebook URL/source |
+| 3795–6076 | `ReaderView` — Article/PDF reader with TTS and voice notes |
+| 6077–9106 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
+| 9107–9456 | `LibraryView` — Source and note management, import/export |
+| 9457–9658 | `NoteSidebar` — Notes display, editing, and navigation |
+| 9659 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -52,7 +55,8 @@ App
 ├── ReaderView (forwardRef)
 │   └── EditableTitle
 ├── MediaView (forwardRef)
-│   └── EditableTitle
+│   ├── EditableTitle
+│   └── NotebookLMModal
 ├── LibraryView
 └── NoteSidebar
 ```
@@ -61,21 +65,30 @@ App
 
 All state lives in the `App` component via `useState` hooks. There is no external state library. Key state:
 
-- `sources` — Array of source objects (articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, pasted text)
+- `sources` — Array of source objects (articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, pasted text, voice notes)
 - `notes` — Array of note objects linked to sources
 - `activeTab` — Current view (`reader`, `media`, `library`)
 - `currentSource` — The active source being consumed
 - `sidebarOpen` — Notes sidebar visibility
 - `carMode` — Simplified large-button UI mode
+- `restoredSession` — Last tab/source restored from the persisted `session` key on startup
+- `selectedVoiceURI` — Global TTS voice preference (`null` = auto-select best voice)
+- `toast` / `undoData` — Toast notification state and pending undo payload
+- `isMobileDevice` — Mobile detection used to adapt UI affordances
+- `pendingNotebookLMModal` — Set when a local audio file is loaded so MediaView can show the NotebookLM modal
 
 State is persisted via the `HJStore` module, which is backed by **IndexedDB**
 (object store `kv` in database `harkenjot`) to avoid the ~5 MB localStorage cap.
 `HJStore` hydrates the entire keyspace into an in-memory cache on `init()` so
 callers get a synchronous `get()`, then writes through to IndexedDB
-asynchronously on each `set()`. If IndexedDB is unavailable, it falls back to
-`localStorage` (using the `harkenjot_*` keys below). On first run it migrates any
-existing `localStorage` values into IndexedDB, after first honoring the legacy
-`marginalia_` → `harkenjot_` rename.
+asynchronously on each `set()`. If IndexedDB is unavailable, it seeds the cache
+from `localStorage` (using the `harkenjot_*` keys below); note this fallback is
+read-only — `set()` does not write back to `localStorage`. On first run it
+migrates any existing `localStorage` values into IndexedDB, after first honoring
+the legacy `marginalia_` → `harkenjot_` rename. The `session` key is written via
+`HJStore.setIfNewer()`, which compares `.ts` timestamps inside one IDB
+transaction so a stale background tab can't clobber the session saved by the tab
+the user actually used last.
 
 | Key | localStorage fallback key | Content |
 |-----|---------------------------|---------|
@@ -83,6 +96,8 @@ existing `localStorage` values into IndexedDB, after first honoring the legacy
 | `notes` | `harkenjot_notes` | All note objects (JSON) |
 | `positions` | `harkenjot_positions` | Reading positions in articles/PDFs |
 | `media_positions` | `harkenjot_media_positions` | Playback positions in media |
+| `session` | `harkenjot_session` | Last active tab/source (timestamped) for restore-on-reload |
+| `voice_uri` | `harkenjot_voice_uri` | Global TTS voice preference (voiceURI string) |
 
 ### Speech Recognition
 
@@ -105,20 +120,24 @@ React, ReactDOM, Babel, and PDF.js load from `unpkg`/`cdnjs` in `<head>`; Transf
 
 ### External APIs Consumed
 
-- **CORS proxies** — `corsproxy.io`, `api.allorigins.win`, `api.codetabs.com` for fetching articles, RSS feeds, and oEmbed/scraped metadata
+- **CORS proxies** — `corsproxy.io`, `api.allorigins.win`, `api.codetabs.com`, `thingproxy.freeboard.io` for fetching articles, RSS feeds, and oEmbed/scraped metadata
+- **Jina Reader** — `r.jina.ai` as a fallback for article text extraction
 - **YouTube** — IFrame API for playback; `youtube.com/oembed` for video metadata
 - **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
 - **X.com / Twitter oEmbed** — `publish.twitter.com/oembed` for embedding X.com videos and tweets
-- **iTunes Search** — `itunes.apple.com/search` for podcast discovery and cover art
+- **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
 - **RSS feeds** — Custom parser for podcast episodes
+- **NotebookLM** — `notebooklm.google.com` opened in a new tab ("Open in NotebookLM" buttons); notebook URLs can be linked to local-audio sources
 
 ### Browser APIs Used
 
-- Web Speech API, Web Audio API (speech recognition)
-- IndexedDB (primary persistence), localStorage (fallback)
+- Web Speech API, Web Audio API, MediaRecorder (speech recognition / voice capture)
+- `speechSynthesis` (text-to-speech in ReaderView)
+- IndexedDB (primary persistence), localStorage (fallback); `navigator.storage.persist()` to request non-evictable storage
 - Media Session API (hardware media controls)
 - Screen Wake Lock API (prevent sleep during playback)
 - Clipboard API (copy notes)
+- FileReader (PDF, local audio, and library JSON import)
 - Fetch API with CORS proxy fallbacks
 
 ## Development Workflow
@@ -169,8 +188,11 @@ There are no linting or formatting tools configured.
 { id, type, title, url, content, date, ... }
 ```
 
-`type` is one of `article`, `text` (pasted), `youtube`, `podcast`, or `xvideo`
-(X.com/Twitter — itself either a `broadcast` or a `tweet` video).
+`type` is one of `article`, `text` (pasted), `pdf` (uploaded file), `youtube`,
+`podcast`, `xvideo` (X.com/Twitter — itself either a `broadcast` or a `tweet`
+video), or `voice` (standalone voice-note recordings). Local audio files (e.g.
+NotebookLM podcast exports) are `podcast` sources with `localFile: true`, and may
+carry a linked NotebookLM notebook URL.
 
 **Note object**:
 ```js
@@ -198,12 +220,13 @@ Notes reference their parent source via `sourceId`. Position anchoring differs b
 
 - **UI/Theme**: CSS variables in `:root` (around line 233)
 - **Icons**: `Icons` object (line 2124)
-- **Persistence**: `HJStore` IndexedDB module (line 2282)
-- **Reader functionality**: `ReaderView` (line 3620)
-- **Media/podcast/X.com functionality**: `MediaView` (line 5756)
-- **Library/export**: `LibraryView` (line 8570)
-- **Notes panel**: `NoteSidebar` (line 8885)
-- **App-level state/routing**: `App` (line 2664)
+- **Persistence**: `HJStore` IndexedDB module (line 2283)
+- **Reader functionality**: `ReaderView` (line 3795)
+- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 6077)
+- **NotebookLM linking**: `NotebookLMModal` (line 3387)
+- **Library/export**: `LibraryView` (line 9107)
+- **Notes panel**: `NoteSidebar` (line 9457)
+- **App-level state/routing**: `App` (line 2721)
 
 ### Version
 
