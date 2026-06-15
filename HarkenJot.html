@@ -2286,6 +2286,7 @@
       _ready: false,
       _dbName: 'harkenjot',
       _store: 'kv',
+      _handleStore: 'audioHandles',
       _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri'],
       _lsKey: {
         sources: 'harkenjot_sources',
@@ -2298,10 +2299,13 @@
 
       _open() {
         return new Promise((resolve, reject) => {
-          const req = indexedDB.open(this._dbName, 1);
+          const req = indexedDB.open(this._dbName, 2);
           req.onupgradeneeded = (e) => {
             const db = e.target.result;
             if (!db.objectStoreNames.contains(this._store)) db.createObjectStore(this._store);
+            // v2: lazily-loaded store for FileSystemFileHandles of local audio
+            // files, keyed by source id. Kept out of the in-memory cache.
+            if (!db.objectStoreNames.contains(this._handleStore)) db.createObjectStore(this._handleStore);
           };
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => reject(req.error);
@@ -2319,6 +2323,39 @@
         return new Promise((resolve, reject) => {
           const tx = this._db.transaction(this._store, 'readwrite');
           const req = tx.objectStore(this._store).put(value, key);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      },
+
+      // Local-audio file handles (File System Access API). Stored directly in
+      // the 'audioHandles' object store — never hydrated into _cache, so large
+      // libraries don't bloat startup. FileSystemFileHandle is structured-
+      // cloneable, so it persists in IDB as-is. All three no-op when IDB is
+      // unavailable (localStorage fallback can't hold handles).
+      putAudioHandle(id, handle) {
+        if (!this._db) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          const tx = this._db.transaction(this._handleStore, 'readwrite');
+          const req = tx.objectStore(this._handleStore).put(handle, id);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      },
+      getAudioHandle(id) {
+        if (!this._db) return Promise.resolve(undefined);
+        return new Promise((resolve, reject) => {
+          const tx = this._db.transaction(this._handleStore, 'readonly');
+          const req = tx.objectStore(this._handleStore).get(id);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      },
+      deleteAudioHandle(id) {
+        if (!this._db) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          const tx = this._db.transaction(this._handleStore, 'readwrite');
+          const req = tx.objectStore(this._handleStore).delete(id);
           req.onsuccess = () => resolve();
           req.onerror = () => reject(req.error);
         });
@@ -3080,6 +3117,9 @@
         undoTimeoutRef.current = setTimeout(() => {
           setUndoData(null);
           setToast({ show: false, message: '', showUndo: false });
+          // Finalize: drop any persisted local-audio file handle. Done only
+          // after the undo window so an undo restores a reconnectable source.
+          if (sourceToDelete.localFile) HJStore.deleteAudioHandle(sourceId).catch(() => {});
         }, 5000);
       };
 
@@ -3141,7 +3181,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.36.4</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.37.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6083,6 +6123,9 @@
       const [videoId, setVideoId] = useState(null);
       const [podcastAudio, setPodcastAudio] = useState(null); // { audioUrl, title, showName, artworkUrl, link }
       const [needsFileRelink, setNeedsFileRelink] = useState(false);
+      // True when a saved file handle exists for the unplayable local file, so
+      // the banner can offer a one-click reconnect instead of a full re-pick.
+      const [hasStoredHandle, setHasStoredHandle] = useState(false);
       const [isLoadingPodcast, setIsLoadingPodcast] = useState(false);
       const [speechReady, setSpeechReady] = useState(false);
       const [useWhisperFallback, setUseWhisperFallback] = useState(false);
@@ -6172,11 +6215,39 @@
           // Check if audioUrl is missing (older sources might not have it)
           if (!currentSource.audioUrl) {
             if (currentSource.localFile) {
-              // Local files use data URLs that aren't persisted — show relink banner
+              // Local-file audio isn't stored in the sources JSON. Show the
+              // placeholder, then try to reconnect via the saved file handle so
+              // the file plays again without re-picking it.
               setVideoId(null);
               setArtworkFailed(false);
-              setNeedsFileRelink(true);
               setPodcastAudio({ audioUrl: '', title: currentSource.title, showName: '', artworkUrl: currentSource.artworkUrl || '', link: '' });
+              const src = currentSource;
+              (async () => {
+                const handle = await HJStore.getAudioHandle(src.id).catch(() => null);
+                if (handle) {
+                  try {
+                    const perm = await handle.queryPermission({ mode: 'read' });
+                    if (perm === 'granted') {
+                      const file = await handle.getFile();
+                      const blobUrl = await processLocalAudioFile(file);
+                      activeBlobUrlsRef.current.add(blobUrl);
+                      setHasStoredHandle(false);
+                      setNeedsFileRelink(false);
+                      setPodcastAudio(prev => ({ ...prev, audioUrl: blobUrl }));
+                      return;
+                    }
+                    // Permission not yet granted this session — offer one-click reconnect.
+                    setHasStoredHandle(true);
+                    setNeedsFileRelink(true);
+                    return;
+                  } catch (e) {
+                    // File moved/deleted/inaccessible — fall back to a full re-pick.
+                    console.warn('Audio handle auto-reconnect failed:', e);
+                  }
+                }
+                setHasStoredHandle(false);
+                setNeedsFileRelink(true);
+              })();
             } else {
               showToast('This podcast is missing its audio URL - please re-add it from the original link');
               setVideoId(null);
@@ -7633,65 +7704,122 @@
         showToast('Linked to article');
       };
 
-      const loadLocalAudioFile = () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'audio/*,.m4a,.m4b,.aac';
-        input.onchange = async (e) => {
-          const file = e.target.files[0];
-          if (!file) return;
-          // Check before MSE/blob processing so we don't burn CPU on a duplicate.
-          if (!await checkDuplicateBeforeLoad({ type: 'podcast', localFile: true, fileName: file.name })) {
-            return;
-          }
-          const blobUrl = await processLocalAudioFile(file);
-          const title = file.name.replace(/\.[^.]+$/, '');
-          setVideoId(null);
-          setXVideo(null);
-          setArtworkFailed(false);
-          setPodcastAudio({ audioUrl: blobUrl, title, showName: '', artworkUrl: '', link: '' });
-          activeBlobUrlsRef.current.add(blobUrl);
-          const newSource = addSource({
-            type: 'podcast',
-            title,
-            url: '',
-            audioUrl: '', // Don't store data URL in localStorage — too large
-            localFile: true,
-            fileName: file.name,
-          });
-          // Mark as already initialized so useEffect doesn't overwrite podcastAudio
-          lastInitializedSourceRef.current = newSource.id;
-          showToast('Audio file loaded');
-          setPendingNotebookLMModal(true);
-        };
-        input.click();
+      // File System Access API file-picker descriptor (used when supported).
+      // Note: accept keys must be concrete MIME types — wildcards like 'audio/*'
+      // make showOpenFilePicker throw.
+      const AUDIO_PICKER_TYPES = [{
+        description: 'Audio',
+        accept: {
+          'audio/mp4': ['.m4a', '.m4b'],
+          'audio/aac': ['.aac'],
+          'audio/mpeg': ['.mp3'],
+          'audio/wav': ['.wav'],
+          'audio/ogg': ['.ogg'],
+        },
+      }];
+
+      // Pick a local audio file. When the File System Access API is available we
+      // return a FileSystemFileHandle (persistable in IDB so the file can be
+      // reconnected after a reload); otherwise we fall back to a plain <input>
+      // which yields only a one-session File. Resolves null if the user cancels.
+      const pickAudioFile = () => {
+        if (window.showOpenFilePicker) {
+          return window.showOpenFilePicker({ types: AUDIO_PICKER_TYPES, multiple: false })
+            .then(async ([handle]) => ({ file: await handle.getFile(), handle }))
+            .catch(() => null); // user cancelled (AbortError) or picker unavailable
+        }
+        return new Promise((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'audio/*,.m4a,.m4b,.aac';
+          input.onchange = (e) => {
+            const file = e.target.files[0];
+            resolve(file ? { file, handle: null } : null);
+          };
+          input.click();
+        });
       };
 
-      const relinkAudioFile = () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'audio/*,.m4a,.m4b,.aac';
-        input.onchange = async (e) => {
-          const file = e.target.files[0];
-          if (!file) return;
-          const blobUrl = await processLocalAudioFile(file);
-          activeBlobUrlsRef.current.add(blobUrl);
-          updateSource(currentSource.id, { audioUrl: '' }); // Keep localStorage small
-          setPodcastAudio(prev => ({ ...prev, audioUrl: blobUrl }));
-          setNeedsFileRelink(false);
-          showToast('Audio file re-linked');
-          setTimeout(() => {
-            if (audioPlayerRef.current) {
-              const savedPositions = HJStore.get('media_positions') || {};
-              const savedPosition = savedPositions[currentSource.id];
-              if (savedPosition) {
-                audioPlayerRef.current.currentTime = savedPosition;
-                setCurrentTime(savedPosition);
-              }
+      const loadLocalAudioFile = async () => {
+        const picked = await pickAudioFile();
+        if (!picked) return;
+        const { file, handle } = picked;
+        // Check before MSE/blob processing so we don't burn CPU on a duplicate.
+        if (!await checkDuplicateBeforeLoad({ type: 'podcast', localFile: true, fileName: file.name })) {
+          return;
+        }
+        const blobUrl = await processLocalAudioFile(file);
+        const title = file.name.replace(/\.[^.]+$/, '');
+        setVideoId(null);
+        setXVideo(null);
+        setArtworkFailed(false);
+        setPodcastAudio({ audioUrl: blobUrl, title, showName: '', artworkUrl: '', link: '' });
+        activeBlobUrlsRef.current.add(blobUrl);
+        const newSource = addSource({
+          type: 'podcast',
+          title,
+          url: '',
+          audioUrl: '', // Don't store data URL in localStorage — too large
+          localFile: true,
+          fileName: file.name,
+        });
+        // Persist the file handle so the file reconnects automatically on reload.
+        if (handle) HJStore.putAudioHandle(newSource.id, handle).catch(() => {});
+        // Mark as already initialized so useEffect doesn't overwrite podcastAudio
+        lastInitializedSourceRef.current = newSource.id;
+        showToast('Audio file loaded');
+        setPendingNotebookLMModal(true);
+      };
+
+      // Restore playback position for the current source after (re)loading audio.
+      const restoreSavedPosition = () => {
+        setTimeout(() => {
+          if (audioPlayerRef.current) {
+            const savedPositions = HJStore.get('media_positions') || {};
+            const savedPosition = savedPositions[currentSource.id];
+            if (savedPosition) {
+              audioPlayerRef.current.currentTime = savedPosition;
+              setCurrentTime(savedPosition);
             }
-          }, 500);
-        };
-        input.click();
+          }
+        }, 500);
+      };
+
+      // Banner action for an unplayable local file. If we have a stored handle,
+      // a single click re-grants read permission and reconnects the original
+      // file (no folder navigation). Otherwise fall back to a full re-pick.
+      const reconnectAudioFile = async () => {
+        const handle = await HJStore.getAudioHandle(currentSource.id).catch(() => null);
+        if (handle) {
+          try {
+            const perm = await handle.requestPermission({ mode: 'read' });
+            if (perm === 'granted') {
+              const file = await handle.getFile();
+              const blobUrl = await processLocalAudioFile(file);
+              activeBlobUrlsRef.current.add(blobUrl);
+              setPodcastAudio(prev => ({ ...prev, audioUrl: blobUrl }));
+              setNeedsFileRelink(false);
+              showToast('Audio file reconnected');
+              restoreSavedPosition();
+              return;
+            }
+          } catch (e) {
+            // Permission denied, or the file was moved/deleted — fall through to re-pick.
+            console.warn('Audio handle reconnect failed:', e);
+          }
+        }
+        // No handle (or reconnect failed): pick the file again, persisting the
+        // new handle when the File System Access API is available.
+        const picked = await pickAudioFile();
+        if (!picked) return;
+        const blobUrl = await processLocalAudioFile(picked.file);
+        activeBlobUrlsRef.current.add(blobUrl);
+        if (picked.handle) HJStore.putAudioHandle(currentSource.id, picked.handle).catch(() => {});
+        updateSource(currentSource.id, { audioUrl: '' }); // Keep localStorage small
+        setPodcastAudio(prev => ({ ...prev, audioUrl: blobUrl }));
+        setNeedsFileRelink(false);
+        showToast('Audio file re-linked');
+        restoreSavedPosition();
       };
 
       const loadMedia = async () => {
@@ -8882,8 +9010,11 @@
                       // Data URL was created this session — actual playback failure
                       showToast(`Failed to load audio file (${codeDesc})`);
                     } else {
-                      // Stale URL from a previous session — need to re-select file
+                      // Stale URL from a previous session — offer reconnect (one
+                      // click via the saved handle, else a full re-pick).
+                      const sid = currentSource.id;
                       setNeedsFileRelink(true);
+                      HJStore.getAudioHandle(sid).then(h => setHasStoredHandle(!!h)).catch(() => {});
                     }
                   } else {
                     showToast(`Failed to load audio (${codeDesc})`);
@@ -8894,8 +9025,10 @@
 
               {needsFileRelink && (
                 <div className="relink-banner">
-                  <span>Audio unavailable — local files must be re-selected each session.</span>
-                  <button type="button" onClick={relinkAudioFile}>Re-link file</button>
+                  <span>{hasStoredHandle
+                    ? 'Reconnect this file to keep listening — one click, no folder browsing.'
+                    : 'Audio unavailable — local files must be re-selected each session.'}</span>
+                  <button type="button" onClick={reconnectAudioFile}>{hasStoredHandle ? 'Reconnect file' : 'Re-link file'}</button>
                 </div>
               )}
 
