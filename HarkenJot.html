@@ -4,10 +4,115 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HarkenJot - Take Notes While You Listen</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!--
+    Dependency bootstrap. Libraries are PINNED to specific versions and loaded with
+    multi-CDN fallback (unpkg -> jsDelivr -> cdnjs) so a single CDN outage, or a bad
+    "latest" build, can't blank the whole app. The app's JSX lives in the (browser-
+    inert) #app-source block in <body> and is transpiled here, once, after Babel loads
+    — using the CLASSIC JSX runtime (React.createElement). Newer Babel defaults to the
+    AUTOMATIC runtime, which emits `import {...} from "react/jsx-runtime"`; injected as
+    a classic script that throws "Cannot use import statement outside a module" and
+    leaves a blank page. Forcing classic runtime + pinning prevents that regression.
+  -->
+  <script>
+    (function () {
+      'use strict';
+      var REACT_VER = '18.3.1';
+      var BABEL_VER = '7.26.4';
+      var PDFJS_VER = '3.11.174';
+
+      // Try each URL in turn; resolve on the first that loads, reject only if all fail.
+      function loadScript(urls) {
+        return new Promise(function (resolve, reject) {
+          var i = 0;
+          (function attempt() {
+            if (i >= urls.length) { reject(new Error('All sources failed for ' + urls[0])); return; }
+            var url = urls[i++];
+            var s = document.createElement('script');
+            s.src = url;
+            s.async = false;
+            s.onload = function () { resolve(url); };
+            s.onerror = function () {
+              console.warn('HarkenJot: failed to load ' + url + (i < urls.length ? ', trying next source' : ''));
+              if (s.parentNode) s.parentNode.removeChild(s);
+              attempt();
+            };
+            (document.head || document.documentElement).appendChild(s);
+          })();
+        });
+      }
+
+      // Replace the silent blank page with an actionable message.
+      function showLoadError(message) {
+        var root = document.getElementById('root');
+        if (!root || root.childElementCount > 0) return; // app (or an error) already rendered
+        root.innerHTML =
+          '<div style="max-width:32rem;margin:15vh auto;padding:0 1.5rem;font-family:system-ui,-apple-system,sans-serif;color:#222;text-align:center;">' +
+            '<h1 style="font-size:1.25rem;margin:0 0 .5rem;">HarkenJot couldn’t start</h1>' +
+            '<p style="line-height:1.5;color:#555;margin:0 0 1.25rem;">' + message + '</p>' +
+            '<button onclick="location.reload()" style="font:inherit;font-size:1rem;padding:.6rem 1.4rem;border:0;border-radius:.5rem;background:#2563eb;color:#fff;cursor:pointer;">Reload</button>' +
+          '</div>';
+      }
+
+      // Transpile the inline JSX source and run it, exactly once.
+      function bootApp() {
+        if (window.__hjBooted) return;
+        window.__hjBooted = true;
+        try {
+          var srcEl = document.getElementById('app-source');
+          var out = window.Babel.transform(srcEl.textContent, {
+            presets: [['react', { runtime: 'classic' }]],
+            sourceType: 'script',
+            filename: 'harkenjot.jsx'
+          }).code;
+          var s = document.createElement('script');
+          s.textContent = out;
+          document.body.appendChild(s);
+        } catch (e) {
+          console.error('HarkenJot: failed to transpile/boot the app.', e);
+          showLoadError('The app failed to start. (' + ((e && e.message) || e) + ')');
+        }
+      }
+
+      // Watchdog: if nothing has mounted after a generous delay, surface a message
+      // rather than leaving the user on a silent blank screen.
+      setTimeout(function () {
+        var root = document.getElementById('root');
+        if (root && root.childElementCount === 0) {
+          showLoadError('The app is taking too long to load. A content-delivery network may be temporarily unavailable — check your connection and reload.');
+        }
+      }, 20000);
+
+      loadScript([
+        'https://unpkg.com/react@' + REACT_VER + '/umd/react.production.min.js',
+        'https://cdn.jsdelivr.net/npm/react@' + REACT_VER + '/umd/react.production.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/react/' + REACT_VER + '/umd/react.production.min.js'
+      ]).then(function () {
+        return loadScript([
+          'https://unpkg.com/react-dom@' + REACT_VER + '/umd/react-dom.production.min.js',
+          'https://cdn.jsdelivr.net/npm/react-dom@' + REACT_VER + '/umd/react-dom.production.min.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/react-dom/' + REACT_VER + '/umd/react-dom.production.min.js'
+        ]);
+      }).then(function () {
+        return loadScript([
+          'https://unpkg.com/@babel/standalone@' + BABEL_VER + '/babel.min.js',
+          'https://cdn.jsdelivr.net/npm/@babel/standalone@' + BABEL_VER + '/babel.min.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/' + BABEL_VER + '/babel.min.js'
+        ]);
+      }).then(function () {
+        // PDF.js is only needed for PDF reading, not for boot — load it opportunistically.
+        loadScript([
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VER + '/pdf.min.js',
+          'https://cdn.jsdelivr.net/npm/pdfjs-dist@' + PDFJS_VER + '/build/pdf.min.js',
+          'https://unpkg.com/pdfjs-dist@' + PDFJS_VER + '/build/pdf.min.js'
+        ]).catch(function (e) { console.warn('HarkenJot: PDF.js failed to load; PDF features disabled.', e); });
+        bootApp();
+      }).catch(function (e) {
+        console.error('HarkenJot: failed to load core libraries.', e);
+        showLoadError('Couldn’t load the app’s core libraries. A content-delivery network may be temporarily down — check your connection and reload.');
+      });
+    })();
+  </script>
   <script>
     // Web Speech API for voice recognition
     // This uses the browser's native speech recognition (Google's service on Chrome/Edge)
@@ -2117,7 +2222,9 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel">
+  <!-- App source (JSX). type="text/babel-app" keeps the browser AND Babel's auto-run
+       from touching it; the bootstrap loader in <head> transpiles it explicitly. -->
+  <script type="text/babel-app" id="app-source">
     const { useState, useEffect, useRef, useCallback, useImperativeHandle } = React;
 
     // Icons
@@ -3181,7 +3288,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.37.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.38.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
