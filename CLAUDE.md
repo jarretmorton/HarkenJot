@@ -26,7 +26,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 
 | Line Range | Section |
 |------------|---------|
-| 1–10 | Head, CDN script imports (React 18, ReactDOM 18, Babel, PDF.js) |
+| 3–~135 | Head — dependency **bootstrap loader** (pinned versions, multi-CDN fallback, explicit JSX transpile, blank-screen watchdog/error UI) |
 | 14–57 | `webSpeechAPI` — Browser-native speech recognition module |
 | 62–227 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
 | 231 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
@@ -110,13 +110,22 @@ Two recognition systems with automatic fallback:
 
 | Library | Version | Purpose |
 |---------|---------|---------|
-| React | 18 | UI framework |
-| ReactDOM | 18 | React rendering |
-| Babel Standalone | latest | In-browser JSX transpilation |
+| React | 18.3.1 (production build) | UI framework |
+| ReactDOM | 18.3.1 (production build) | React rendering |
+| Babel Standalone | 7.26.4 (pinned) | In-browser JSX transpilation |
 | PDF.js | 3.11.174 | PDF rendering and text extraction |
 | Transformers.js | 2.17.1 | Whisper AI speech recognition (loaded async via `import()` from jsDelivr only when the Whisper fallback is needed) |
 
-React, ReactDOM, Babel, and PDF.js load from `unpkg`/`cdnjs` in `<head>`; Transformers.js loads on demand from `cdn.jsdelivr.net`.
+**All versions are pinned** — an unpinned `@babel/standalone` once auto-upgraded to a
+build that defaulted JSX to the *automatic* runtime (emitting `import "react/jsx-runtime"`),
+which broke transpilation and blanked the app. The `<head>` bootstrap loader loads each
+render-critical library (React → ReactDOM → Babel) with **multi-CDN fallback**
+(`unpkg` → `cdn.jsdelivr.net` → `cdnjs`), then transpiles the inert `#app-source` JSX
+block exactly once using the **classic** JSX runtime (`React.createElement`, no imports)
+and injects the result. PDF.js is loaded opportunistically (not boot-critical). If all
+CDNs for a core library fail — or nothing mounts within a watchdog timeout — the loader
+renders a visible error + Reload button instead of a blank screen. Transformers.js still
+loads on demand from `cdn.jsdelivr.net`.
 
 ### External APIs Consumed
 
