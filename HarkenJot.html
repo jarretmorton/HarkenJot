@@ -2339,6 +2339,102 @@
       return { triggered: false, cleanedText: trimmed };
     };
 
+    // Ask trigger: a voice note starting with "explain" performs a dictionary/encyclopedia
+    // lookup instead of saving the raw transcript. Word-boundary, case-insensitive; the
+    // trigger word and any trailing punctuation are stripped to form the query.
+    const detectAskTrigger = (text) => {
+      if (!text) return { triggered: false, query: '' };
+      const trimmed = text.trim();
+      const m = trimmed.match(/^explain\b[\s,.:;!?\-–—]*/i);
+      if (!m) return { triggered: false, query: trimmed };
+      const query = trimmed.slice(m[0].length).trim().replace(/[\s.?!,]+$/, '');
+      if (!query) return { triggered: false, query: trimmed }; // bare "explain" → normal note
+      return { triggered: true, query };
+    };
+
+    // Fetch with a hard timeout so a hung tier can't stall the lookup; callers fall through on reject.
+    const fetchWithTimeout = async (url, ms = 3000) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      try {
+        return await fetch(url, { signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Convert HTML fragments (Wiktionary definitions carry markup) to plain text. DOMParser is
+    // inert — it does not execute scripts or build a live DOM — so this never runs fetched markup.
+    const stripHtmlToText = (html) => {
+      if (!html) return '';
+      try {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+      } catch {
+        return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    };
+
+    // Two-tier lookup for the "explain" voice command. Tier 1 Wiktionary definitions, Tier 2
+    // Wikipedia summary (retried with Title Case, since Wikipedia titles are case-sensitive).
+    // Each request is capped at 3s; returns { answer, source } or null when nothing is found.
+    const lookupTerm = async (term) => {
+      const slug = (s) => encodeURIComponent(s.trim().replace(/\s+/g, '_'));
+
+      // Tier 1 — Wiktionary
+      try {
+        const res = await fetchWithTimeout(`https://en.wiktionary.org/api/rest_v1/page/definition/${slug(term)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const entries = Array.isArray(data.en) ? data.en : (data[Object.keys(data)[0]] || null);
+          if (Array.isArray(entries)) {
+            const senses = [];
+            for (const entry of entries) {
+              for (const d of (entry.definitions || [])) {
+                const t = stripHtmlToText(d.definition);
+                if (t) senses.push(entry.partOfSpeech ? `(${entry.partOfSpeech.toLowerCase()}) ${t}` : t);
+                if (senses.length >= 2) break;
+              }
+              if (senses.length >= 2) break;
+            }
+            if (senses.length) return { answer: senses.join(' '), source: 'Wiktionary' };
+          }
+        }
+      } catch (e) { /* timeout/network — fall through to Tier 2 */ }
+
+      // Tier 2 — Wikipedia (as-is, then Title Case)
+      const titleCase = term.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      const variants = titleCase !== term.trim() ? [term, titleCase] : [term];
+      for (const variant of variants) {
+        try {
+          const res = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug(variant)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.extract) return { answer: data.extract, source: 'Wikipedia' };
+          }
+        } catch (e) { /* try next variant */ }
+      }
+
+      return null;
+    };
+
+    // Speak a one-off utterance using the shared TTS voice selection. Resolves on end/error and
+    // via a length-based safety timer, so callers' resume logic can never hang on a stuck utterance.
+    const speakText = (text, voiceURI, rate = 1) => new Promise((resolve) => {
+      if (!text || !('speechSynthesis' in window)) { resolve(); return; }
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = rate;
+      const voices = window.speechSynthesis.getVoices();
+      const chosen = (voiceURI && voices.find(v => v.voiceURI === voiceURI)) || getBestVoice();
+      if (chosen) u.voice = chosen;
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      u.onend = finish;
+      u.onerror = finish;
+      setTimeout(finish, Math.min(60000, 3000 + text.length * 120 / rate));
+      window.speechSynthesis.speak(u);
+    });
+
     // Score how well an audio filename matches a source title for NotebookLM linking suggestions.
     // Returns { score: 0–1, reason: string|null }
     const scoreSourceMatch = (fileName, sourceTitle) => {
@@ -3288,7 +3384,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.38.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.39.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -3381,6 +3477,7 @@
                   pendingNotebookLMModal={pendingNotebookLMModal}
                   setPendingNotebookLMModal={setPendingNotebookLMModal}
                   checkDuplicateBeforeLoad={checkDuplicateBeforeLoad}
+                  selectedVoiceURI={selectedVoiceURI}
                 />
               </div>
               <div style={{ display: activeTab === 'library' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -3687,6 +3784,66 @@
           </div>
         </div>
       );
+    };
+
+    // Get best available voice. Quality is prioritized over locality so we
+    // surface the same neural voices Edge's "Read Aloud" feature uses
+    // (Microsoft Online Natural — Aria/Guy/Jenny/Christopher/etc.) and Apple's
+    // Premium/Enhanced voices (Ava/Zoe/Evan/etc.). The previous local-first
+    // ordering filtered these out because cloud voices report
+    // localService:false, so users got the worse local voice by default.
+    // Do NOT re-introduce a localService gate above the premium tiers.
+    // Module-scoped so both ReaderView TTS and the shared speakText() (Explain
+    // feature, used from MediaView too) can reuse the same selection logic.
+    const getBestVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return null;
+
+      const englishVoices = voices.filter(voice => voice.lang.startsWith('en'));
+
+      // 1. Microsoft Online Natural / Neural voices (Edge Read Aloud).
+      const msNatural = englishVoices.find(voice =>
+        voice.name.includes('Microsoft') &&
+        (/Online \(Natural\)/i.test(voice.name) || /Neural/i.test(voice.name))
+      );
+      if (msNatural) return msNatural;
+
+      // 2. Apple Premium / Enhanced voices (iOS/macOS high-quality voices).
+      const applePremium = englishVoices.find(voice =>
+        /\((Premium|Enhanced)\)/i.test(voice.name)
+      );
+      if (applePremium) return applePremium;
+
+      // 3. Google Neural / WaveNet voices.
+      const googleNeural = englishVoices.find(voice =>
+        voice.name.includes('Google') && /(Neural|WaveNet)/i.test(voice.name)
+      );
+      if (googleNeural) return googleNeural;
+
+      // 4. Microsoft "Natural" or "Online" (legacy match — Windows 11 installed
+      // Natural voices that don't exactly match the Online (Natural) pattern).
+      const msAnyPremium = englishVoices.find(voice =>
+        voice.name.includes('Microsoft') &&
+        (voice.name.includes('Natural') || voice.name.includes('Online'))
+      );
+      if (msAnyPremium) return msAnyPremium;
+
+      // 5. Local Google English voice (e.g. Android "Google US English").
+      const localGoogle = englishVoices.find(voice =>
+        voice.localService && voice.name.includes('Google')
+      );
+      if (localGoogle) return localGoogle;
+
+      // 6. Any local English voice (macOS "Samantha", "Microsoft David", etc.).
+      const localEnglish = englishVoices.find(voice => voice.localService);
+      if (localEnglish) return localEnglish;
+
+      // 7. Any local voice in any language.
+      const anyLocal = voices.find(voice => voice.localService);
+      if (anyLocal) return anyLocal;
+
+      // 8. Any English voice. 9. Any voice.
+      return englishVoices[0] || voices[0];
     };
 
     // Classify a voice into a quality tier matching the priority order in getBestVoice().
@@ -5201,64 +5358,6 @@
         }
       };
 
-      // Get best available voice. Quality is prioritized over locality so we
-      // surface the same neural voices Edge's "Read Aloud" feature uses
-      // (Microsoft Online Natural — Aria/Guy/Jenny/Christopher/etc.) and Apple's
-      // Premium/Enhanced voices (Ava/Zoe/Evan/etc.). The previous local-first
-      // ordering filtered these out because cloud voices report
-      // localService:false, so users got the worse local voice by default.
-      // Do NOT re-introduce a localService gate above the premium tiers.
-      const getBestVoice = () => {
-        const voices = window.speechSynthesis.getVoices();
-        if (!voices.length) return null;
-
-        const englishVoices = voices.filter(voice => voice.lang.startsWith('en'));
-
-        // 1. Microsoft Online Natural / Neural voices (Edge Read Aloud).
-        const msNatural = englishVoices.find(voice =>
-          voice.name.includes('Microsoft') &&
-          (/Online \(Natural\)/i.test(voice.name) || /Neural/i.test(voice.name))
-        );
-        if (msNatural) return msNatural;
-
-        // 2. Apple Premium / Enhanced voices (iOS/macOS high-quality voices).
-        const applePremium = englishVoices.find(voice =>
-          /\((Premium|Enhanced)\)/i.test(voice.name)
-        );
-        if (applePremium) return applePremium;
-
-        // 3. Google Neural / WaveNet voices.
-        const googleNeural = englishVoices.find(voice =>
-          voice.name.includes('Google') && /(Neural|WaveNet)/i.test(voice.name)
-        );
-        if (googleNeural) return googleNeural;
-
-        // 4. Microsoft "Natural" or "Online" (legacy match — Windows 11 installed
-        // Natural voices that don't exactly match the Online (Natural) pattern).
-        const msAnyPremium = englishVoices.find(voice =>
-          voice.name.includes('Microsoft') &&
-          (voice.name.includes('Natural') || voice.name.includes('Online'))
-        );
-        if (msAnyPremium) return msAnyPremium;
-
-        // 5. Local Google English voice (e.g. Android "Google US English").
-        const localGoogle = englishVoices.find(voice =>
-          voice.localService && voice.name.includes('Google')
-        );
-        if (localGoogle) return localGoogle;
-
-        // 6. Any local English voice (macOS "Samantha", "Microsoft David", etc.).
-        const localEnglish = englishVoices.find(voice => voice.localService);
-        if (localEnglish) return localEnglish;
-
-        // 7. Any local voice in any language.
-        const anyLocal = voices.find(voice => voice.localService);
-        if (anyLocal) return anyLocal;
-
-        // 8. Any English voice. 9. Any voice.
-        return englishVoices[0] || voices[0];
-      };
-
       const speakFromIndex = useCallback((index) => {
         if (!content || index >= content.sentences.length) {
           setIsPlaying(false);
@@ -5526,6 +5625,32 @@
         }
       };
 
+      // Handle an "explain ..." voice command: look up the term, save the Q/A as a first-class
+      // note anchored at the current sentence, speak the answer, then resume reading only after
+      // the answer finishes (instead of the normal immediate 300ms resume).
+      const handleAskQuery = async (query, notePosition, wasPlaying) => {
+        showToast(`Looking up "${query}"...`);
+        const result = await lookupTerm(query);
+        const answerText = result ? result.answer : `No result found for ${query}.`;
+        const sentence = sentencesRef.current[notePosition];
+        addNote({
+          sourceId: currentSource?.id,
+          text: `Q: ${query} / A: ${answerText}${result ? ` (${result.source})` : ''}`,
+          position: notePosition,
+          context: sentence ? sentence.substring(0, 100) + '...' : '',
+          type: 'voice',
+          fullSentenceCaptured: false
+        });
+        playSound(result ? 'success' : 'error');
+        wasCancelledRef.current = false;
+        await speakText(answerText, selectedVoiceURI, speed);
+        // startRecording sets wasCancelledRef true if a new recording cancelled the answer
+        // mid-speech — in that case don't resume reading underneath the new recording.
+        if (wasPlaying && !wasCancelledRef.current && speakFromIndexRef.current) {
+          setTimeout(() => speakFromIndexRef.current(notePosition), 300);
+        }
+      };
+
       // Start recording using Whisper (MediaRecorder-based) with silence detection
       const startWhisperRecording = async (wasPlaying, notePosition) => {
         try {
@@ -5663,6 +5788,12 @@
             try {
               const transcript = await window.WhisperASR.transcribe(audioBlob);
               if (transcript && transcript.trim()) {
+                const ask = detectAskTrigger(transcript);
+                if (ask.triggered) {
+                  setIsTranscribing(false);
+                  handleAskQuery(ask.query, notePosition, wasPlaying);
+                  return; // handleAskQuery owns the note, answer, and resume
+                }
                 const sentence = sentencesRef.current[notePosition];
                 const trig = detectNoteTrigger(transcript);
                 const noteText = trig.triggered ? trig.cleanedText : transcript.trim();
@@ -5794,6 +5925,11 @@
             if (hadError) {
               console.log('Skipping onend message - error already handled');
             } else if (finalTranscript.trim()) {
+              const ask = detectAskTrigger(finalTranscript);
+              if (ask.triggered) {
+                handleAskQuery(ask.query, notePosition, wasPlaying);
+                return; // handleAskQuery owns the note, answer, and resume
+              }
               const sentence = sentencesRef.current[notePosition];
               const trig = detectNoteTrigger(finalTranscript);
               const noteText = trig.triggered ? trig.cleanedText : finalTranscript.trim();
@@ -6221,7 +6357,7 @@
     });
 
     // Media View Component
-    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad }, ref) => {
+    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, selectedVoiceURI }, ref) => {
       const [url, setUrl] = useState('');
       const [isPlaying, setIsPlaying] = useState(false);
       const [currentTime, setCurrentTime] = useState(0);
@@ -6266,6 +6402,7 @@
       const streamRef = useRef(null);
       const intervalRef = useRef(null);
       const isStartingRecordingRef = useRef(false);
+      const askCancelledRef = useRef(false); // set true when a new recording interrupts an Explain answer
       const lastInitializedSourceRef = useRef(null); // Track last initialized source to prevent re-init loops
       const wasPlayingRef = useRef(false);
 
@@ -8348,6 +8485,29 @@
         }
       };
 
+      // Handle an "explain ..." voice command: look up the term, save the Q/A as a first-class
+      // note anchored at the current playback time, speak the answer, then resume playback only
+      // after the answer finishes.
+      const handleAskQuery = async (query, recordingTime, wasPlaying) => {
+        showToast(`Looking up "${query}"...`);
+        const result = await lookupTerm(query);
+        const answerText = result ? result.answer : `No result found for ${query}.`;
+        addNote({
+          sourceId: currentSource?.id,
+          text: `Q: ${query} / A: ${answerText}${result ? ` (${result.source})` : ''}`,
+          timestamp: recordingTime,
+          type: 'voice'
+        });
+        playSound(result ? 'success' : 'error');
+        askCancelledRef.current = false;
+        await speakText(answerText, selectedVoiceURI, 1);
+        // Skip resume if a new recording started (and cancelled the answer) while it was speaking.
+        if (wasPlaying && !askCancelledRef.current) {
+          if (audioPlayerRef.current) { audioPlayerRef.current.play(); requestWakeLock(); }
+          if (playerRef.current) playerRef.current.playVideo();
+        }
+      };
+
       // Start recording using Whisper (MediaRecorder-based) with silence detection
       const startWhisperRecording = async (wasPlaying, recordingTime) => {
         try {
@@ -8479,6 +8639,12 @@
             try {
               const transcript = await window.WhisperASR.transcribe(audioBlob);
               if (transcript && transcript.trim()) {
+                const ask = detectAskTrigger(transcript);
+                if (ask.triggered) {
+                  setIsTranscribing(false);
+                  handleAskQuery(ask.query, recordingTime, wasPlaying);
+                  return; // handleAskQuery owns the note, answer, and resume
+                }
                 addNote({
                   sourceId: currentSource?.id,
                   text: transcript.trim(),
@@ -8543,6 +8709,13 @@
         isStartingRecordingRef.current = true;
 
         stopRecording();
+
+        // Cut off an in-flight Explain answer so it doesn't bleed into the new recording or
+        // resume playback underneath it (MediaView has no other speechSynthesis usage).
+        if (window.speechSynthesis.speaking) {
+          askCancelledRef.current = true;
+          window.speechSynthesis.cancel();
+        }
 
         // Capture playing state in local variable BEFORE pausing (closures will preserve this)
         const wasPlaying = isPlaying;
@@ -8610,6 +8783,11 @@
             if (hadError) {
               console.log('Skipping onend message - error already handled');
             } else if (finalTranscript.trim()) {
+              const ask = detectAskTrigger(finalTranscript);
+              if (ask.triggered) {
+                handleAskQuery(ask.query, recordingTime, wasPlaying);
+                return; // handleAskQuery owns the note, answer, and resume
+              }
               addNote({
                 sourceId: currentSource?.id,
                 text: finalTranscript.trim(),
