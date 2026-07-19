@@ -3384,7 +3384,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.39.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.40.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4997,6 +4997,152 @@
               return null;
             }
           };
+
+          // Strategy 0 (X.com): posts and Articles from x.com / twitter.com.
+          // x.com serves an empty JS shell to every CORS proxy, so scraping the
+          // page is useless. Instead:
+          //   1. FxTwitter / vxTwitter mirror APIs — CORS-enabled JSON with the
+          //      full text of posts and long-form Note Tweets, plus title
+          //      metadata when the post is an X Article.
+          //   2. Jina Reader — renders the page in a headless browser; the only
+          //      route that returns the full body of an X Article.
+          //   3. Twitter syndication CDN — last-resort plain-post text.
+          const xStatus = (() => {
+            try {
+              const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+              const host = u.hostname.replace(/^(www\.|mobile\.)/, '');
+              if (host !== 'x.com' && host !== 'twitter.com') return null;
+              const m = u.pathname.match(/^\/([A-Za-z0-9_]+)\/status(?:es)?\/(\d+)/);
+              if (!m) return null;
+              // /i/status/<id> links carry no username in the path
+              return { pathUser: m[1] === 'i' ? null : m[1], id: m[2] };
+            } catch { return null; }
+          })();
+
+          if (xStatus) {
+            showToast('Fetching X post...');
+
+            // Direct fetch first (these APIs send CORS headers), then proxies.
+            const fetchJson = async (apiUrl) => {
+              try {
+                const response = await fetch(apiUrl);
+                if (response.ok) return await response.json();
+                console.log(`[HJ:x] direct: http ${response.status} for ${apiUrl}`);
+              } catch (e) {
+                console.log('[HJ:x] direct failed:', e?.message || e);
+              }
+              const raw = await fetchHtmlViaProxies(apiUrl);
+              if (!raw) return null;
+              try { return JSON.parse(raw); } catch { return null; }
+            };
+
+            // info: normalized view of whichever mirror API answered
+            let info = null;
+            const fx = await fetchJson(`https://api.fxtwitter.com/status/${xStatus.id}`);
+            if (fx?.tweet) {
+              info = {
+                authorName: fx.tweet.author?.name || '',
+                screenName: fx.tweet.author?.screen_name || xStatus.pathUser || '',
+                text: (fx.tweet.text || '').trim(),
+                articleTitle: fx.tweet.article?.title || null,
+                hasVideo: !!(fx.tweet.media?.videos?.length),
+              };
+              console.log('[HJ:x] fxtwitter success', { article: !!info.articleTitle, chars: info.text.length });
+            }
+            if (!info) {
+              const vx = await fetchJson(`https://api.vxtwitter.com/i/status/${xStatus.id}`);
+              if (vx && (vx.text || vx.article)) {
+                info = {
+                  authorName: vx.user_name || '',
+                  screenName: vx.user_screen_name || xStatus.pathUser || '',
+                  text: (vx.text || '').trim(),
+                  articleTitle: vx.article?.title || null,
+                  hasVideo: Array.isArray(vx.media_extended) && vx.media_extended.some(m => m.type === 'video'),
+                };
+                console.log('[HJ:x] vxtwitter success', { article: !!info.articleTitle, chars: info.text.length });
+              }
+            }
+
+            const isXArticle = !!(info && info.articleTitle);
+            let title = null;
+            let bodyText = null;
+            let jinaTried = false;
+
+            if (isXArticle) {
+              // The mirror APIs only carry the Article's title/preview — the
+              // full body needs a rendered page, which Jina provides.
+              showToast('Loading X article...');
+              jinaTried = true;
+              const jina = await tryJinaReader(url);
+              if (jina && jina.text.length > info.text.length) {
+                bodyText = jina.text;
+              } else if (info.text) {
+                bodyText = info.text; // preview text — better than nothing
+              }
+              title = info.articleTitle;
+            } else if (info) {
+              if (info.hasVideo && info.text.length < 100) {
+                showToast('This X post is a video — open it in the Media tab instead.');
+                setLoading(false);
+                return;
+              }
+              bodyText = info.text || null;
+            }
+
+            // No API answered (or gave nothing usable): rendered-page fallback.
+            if (!bodyText && !jinaTried) {
+              showToast('Trying reader service...');
+              const jina = await tryJinaReader(url);
+              if (jina) {
+                bodyText = jina.text;
+                title = title || jina.title;
+              }
+            }
+
+            // Last resort for plain posts: Twitter's syndication CDN.
+            if (!bodyText) {
+              try {
+                const token = ((Number(xStatus.id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
+                const syn = await fetchJson(`https://cdn.syndication.twimg.com/tweet-result?id=${xStatus.id}&token=${token}`);
+                if (syn?.text) {
+                  bodyText = syn.text.trim();
+                  if (!info) {
+                    info = {
+                      authorName: syn.user?.name || '',
+                      screenName: syn.user?.screen_name || xStatus.pathUser || '',
+                      text: bodyText, articleTitle: null, hasVideo: false,
+                    };
+                  }
+                  console.log('[HJ:x] syndication success', { chars: bodyText.length });
+                }
+              } catch (e) {
+                console.log('[HJ:x] syndication failed:', e?.message || e);
+              }
+            }
+
+            if (bodyText) {
+              const attribution = info && (info.authorName || info.screenName)
+                ? `${info.authorName || info.screenName}${info.screenName ? ` (@${info.screenName})` : ''}`
+                : null;
+              if (!title) {
+                const snippet = bodyText.replace(/\s+/g, ' ').slice(0, 80);
+                title = attribution ? `${attribution}: ${snippet}` : (snippet || 'X Post');
+              }
+              const content = isXArticle && attribution ? `By ${attribution}. ${bodyText}` : bodyText;
+              const sentences = splitIntoSentences(content);
+              sentencesRef.current = sentences;
+              addSource({ type: 'article', title, url, content });
+              setUrl('');
+              showToast(isXArticle ? 'X article loaded!' : 'X post loaded!');
+              setLoading(false);
+              return;
+            }
+
+            showToast('Could not load X post. Try pasting the text manually.');
+            setShowManualInput(true);
+            setLoading(false);
+            return;
+          }
 
           // Strategy 0: ForumMagnum GraphQL API (LessWrong, Alignment Forum, EA Forum)
           // These sites block CORS proxy requests with 403, but expose a public GraphQL API

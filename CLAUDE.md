@@ -134,6 +134,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **YouTube** — IFrame API for playback; `youtube.com/oembed` for video metadata
 - **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
 - **X.com / Twitter oEmbed** — `publish.twitter.com/oembed` for embedding X.com videos and tweets
+- **FxTwitter / vxTwitter / Twitter syndication** — `api.fxtwitter.com`, `api.vxtwitter.com`, and `cdn.syndication.twimg.com` for extracting X.com post text in the reader tab (Jina Reader supplies full X Article bodies, since x.com serves an empty JS shell to CORS proxies)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
 - **RSS feeds** — Custom parser for podcast episodes
 - **NotebookLM** — `notebooklm.google.com` opened in a new tab ("Open in NotebookLM" buttons); notebook URLs can be linked to local-audio sources
