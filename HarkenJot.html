@@ -3384,7 +3384,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.40.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.40.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5036,8 +5036,43 @@
               try { return JSON.parse(raw); } catch { return null; }
             };
 
+            // Reassemble a long-form Article body from whatever shape the
+            // mirror API uses: a flat full-text string, or ordered rich-text
+            // blocks (Draft.js-style content_state) whose paragraphs each
+            // carry a .text field. The >300 gate keeps short preview strings
+            // from masquerading as the full body.
+            const collectArticleText = (article) => {
+              if (!article || typeof article !== 'object') return null;
+              for (const key of ['full_text', 'fullText', 'body', 'text']) {
+                if (typeof article[key] === 'string' && article[key].trim().length > 300) {
+                  return article[key].trim();
+                }
+              }
+              const parts = [];
+              const walk = (node, depth) => {
+                if (!node || depth > 6) return;
+                if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+                if (typeof node === 'object') {
+                  if (typeof node.text === 'string' && node.text.trim()) parts.push(node.text.trim());
+                  else Object.values(node).forEach(n => walk(n, depth + 1));
+                }
+              };
+              for (const key of ['content_state', 'contentState', 'content_blocks', 'blocks', 'content']) {
+                if (article[key]) walk(article[key], 0);
+                if (parts.length) break;
+              }
+              const joined = parts.join('\n\n').trim();
+              return joined.length > 300 ? joined : null;
+            };
+
+            // Posts that are just a wrapper around an Article carry only a
+            // t.co link as their text — strip those so they never end up as
+            // the saved "content" or the title snippet.
+            const stripTcoLinks = (t) => (t || '').replace(/https?:\/\/t\.co\/\S+/g, ' ').replace(/[ \t]+/g, ' ').trim();
+
             // info: normalized view of whichever mirror API answered
             let info = null;
+            let articleBody = null;
             const fx = await fetchJson(`https://api.fxtwitter.com/status/${xStatus.id}`);
             if (fx?.tweet) {
               info = {
@@ -5047,46 +5082,65 @@
                 articleTitle: fx.tweet.article?.title || null,
                 hasVideo: !!(fx.tweet.media?.videos?.length),
               };
-              console.log('[HJ:x] fxtwitter success', { article: !!info.articleTitle, chars: info.text.length });
+              articleBody = collectArticleText(fx.tweet.article);
+              console.log('[HJ:x] fxtwitter success', { article: !!info.articleTitle, body: articleBody?.length || 0, chars: info.text.length });
             }
-            if (!info) {
+            // vxtwitter: covers fxtwitter being down, and the case where
+            // fxtwitter knows the post is an Article but omitted its body.
+            if (!info || (info.articleTitle && !articleBody)) {
               const vx = await fetchJson(`https://api.vxtwitter.com/i/status/${xStatus.id}`);
               if (vx && (vx.text || vx.article)) {
-                info = {
-                  authorName: vx.user_name || '',
-                  screenName: vx.user_screen_name || xStatus.pathUser || '',
-                  text: (vx.text || '').trim(),
-                  articleTitle: vx.article?.title || null,
-                  hasVideo: Array.isArray(vx.media_extended) && vx.media_extended.some(m => m.type === 'video'),
-                };
-                console.log('[HJ:x] vxtwitter success', { article: !!info.articleTitle, chars: info.text.length });
+                if (!info) {
+                  info = {
+                    authorName: vx.user_name || '',
+                    screenName: vx.user_screen_name || xStatus.pathUser || '',
+                    text: (vx.text || '').trim(),
+                    articleTitle: null,
+                    hasVideo: Array.isArray(vx.media_extended) && vx.media_extended.some(m => m.type === 'video'),
+                  };
+                }
+                if (!info.articleTitle && vx.article?.title) info.articleTitle = vx.article.title;
+                if (!articleBody) articleBody = collectArticleText(vx.article);
+                console.log('[HJ:x] vxtwitter success', { article: !!info.articleTitle, body: articleBody?.length || 0 });
               }
             }
 
             const isXArticle = !!(info && info.articleTitle);
-            let title = null;
-            let bodyText = null;
+            let title = isXArticle ? info.articleTitle : null;
+            let bodyText = articleBody;
             let jinaTried = false;
 
-            if (isXArticle) {
-              // The mirror APIs only carry the Article's title/preview — the
-              // full body needs a rendered page, which Jina provides.
+            if (isXArticle && !bodyText) {
+              // Mirror APIs only had the title/preview — try rendered-page routes.
               showToast('Loading X article...');
               jinaTried = true;
               const jina = await tryJinaReader(url);
-              if (jina && jina.text.length > info.text.length) {
-                bodyText = jina.text;
-              } else if (info.text) {
-                bodyText = info.text; // preview text — better than nothing
+              if (jina && jina.text.length > 300) bodyText = jina.text;
+            }
+            if (isXArticle && !bodyText) {
+              // archive.today renders JS and keeps full snapshots; popular
+              // articles are usually already archived.
+              try {
+                showToast('Trying archive.today...');
+                const target = url.startsWith('http') ? url : 'https://' + url;
+                const archHtml = await fetchHtmlViaProxies(`https://archive.ph/newest/${target}`);
+                const arch = tryExtractArticle(archHtml);
+                if (arch && arch.text.length > 300) {
+                  bodyText = arch.text;
+                  console.log('[HJ:x] archive.today success', { chars: arch.text.length });
+                }
+              } catch (e) {
+                console.log('[HJ:x] archive.today failed:', e?.message || e);
               }
-              title = info.articleTitle;
-            } else if (info) {
-              if (info.hasVideo && info.text.length < 100) {
+            }
+
+            if (!isXArticle && info) {
+              if (info.hasVideo && stripTcoLinks(info.text).length < 100) {
                 showToast('This X post is a video — open it in the Media tab instead.');
                 setLoading(false);
                 return;
               }
-              bodyText = info.text || null;
+              bodyText = stripTcoLinks(info.text) || null;
             }
 
             // No API answered (or gave nothing usable): rendered-page fallback.
@@ -5100,12 +5154,12 @@
             }
 
             // Last resort for plain posts: Twitter's syndication CDN.
-            if (!bodyText) {
+            if (!bodyText && !isXArticle) {
               try {
                 const token = ((Number(xStatus.id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
                 const syn = await fetchJson(`https://cdn.syndication.twimg.com/tweet-result?id=${xStatus.id}&token=${token}`);
                 if (syn?.text) {
-                  bodyText = syn.text.trim();
+                  bodyText = stripTcoLinks(syn.text);
                   if (!info) {
                     info = {
                       authorName: syn.user?.name || '',
@@ -5138,7 +5192,12 @@
               return;
             }
 
-            showToast('Could not load X post. Try pasting the text manually.');
+            // An Article whose full body couldn't be fetched is not worth
+            // saving — a preview or bare t.co link would just pollute the
+            // library. Fail loudly to manual paste instead.
+            showToast(isXArticle
+              ? 'Could only get the article preview — paste the article text manually.'
+              : 'Could not load X post. Try pasting the text manually.');
             setShowManualInput(true);
             setLoading(false);
             return;
