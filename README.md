@@ -7,7 +7,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 ## Features
 
 - **Voice Notes** — Record voice notes with automatic speech-to-text via Web Speech API (primary) or Whisper AI (offline fallback)
-- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, and local audio files in a single interface
+- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, X.com posts/articles, and local audio files in a single interface
 - **NotebookLM Integration** — Play NotebookLM podcast exports as local audio, link them back to their notebook URL, and jump to NotebookLM from any article
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
