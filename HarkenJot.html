@@ -3433,7 +3433,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.42.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.42.3</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -10053,6 +10053,14 @@
       return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <div className="library-actions">
+            <button
+              className={`btn btn-secondary${searchOpen ? ' active' : ''}`}
+              onClick={toggleSearch}
+              title={searchOpen ? 'Close search' : 'Search library'}
+              style={searchOpen ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
+            >
+              <Icons.Search />
+            </button>
             {searchOpen && (
               <input
                 ref={searchInputRef}
@@ -10074,14 +10082,6 @@
                 }}
               />
             )}
-            <button
-              className={`btn btn-secondary${searchOpen ? ' active' : ''}`}
-              onClick={toggleSearch}
-              title={searchOpen ? 'Close search' : 'Search library'}
-              style={searchOpen ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
-            >
-              <Icons.Search />
-            </button>
             {!searchOpen && (
               <React.Fragment>
                 <button className="btn btn-secondary" onClick={exportToOneNote}>
