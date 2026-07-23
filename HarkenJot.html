@@ -3433,7 +3433,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.42.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.42.2</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -10082,15 +10082,19 @@
             >
               <Icons.Search />
             </button>
-            <button className="btn btn-secondary" onClick={exportToOneNote}>
-              <Icons.Copy /> Copy All
-            </button>
-            <button className="btn btn-secondary" onClick={importLibrary} title="Import Library">
-              <Icons.FolderDown /> Import All
-            </button>
-            <button className="btn btn-secondary" onClick={exportLibrary} title="Export Library">
-              <Icons.FolderUp /> Export All
-            </button>
+            {!searchOpen && (
+              <React.Fragment>
+                <button className="btn btn-secondary" onClick={exportToOneNote}>
+                  <Icons.Copy /> Copy All
+                </button>
+                <button className="btn btn-secondary" onClick={importLibrary} title="Import Library">
+                  <Icons.FolderDown /> Import All
+                </button>
+                <button className="btn btn-secondary" onClick={exportLibrary} title="Export Library">
+                  <Icons.FolderUp /> Export All
+                </button>
+              </React.Fragment>
+            )}
             <div ref={filterRef} style={{ position: 'relative', flexShrink: 0 }}>
               <button
                 className="btn btn-secondary"
