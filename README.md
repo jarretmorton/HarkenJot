@@ -51,7 +51,7 @@ HarkenJot has three main views:
 | Tab | Purpose |
 |-----|---------|
 | **Reader** | Load articles or X.com posts/Articles (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
-| **Media** | Play YouTube videos, podcasts (via RSS/audio URL), X.com/Twitter videos, or local audio files (e.g. NotebookLM podcast exports). Take voice or text notes anchored to the playback timestamp. |
+| **Media** | Play YouTube videos, podcasts (via RSS/audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. NotebookLM podcast exports). Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
 
 ## Tech Stack

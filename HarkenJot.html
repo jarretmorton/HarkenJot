@@ -3384,7 +3384,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.40.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.41.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -7041,6 +7041,7 @@
         }
         // RSS feed URLs - match common patterns and podcast hosting domains
         if (lowerUrl.includes('.xml') || lowerUrl.includes('/rss') || lowerUrl.includes('/feed') ||
+            lowerUrl.match(/\.rss(\?|$)/) || lowerUrl.includes('substack.com/feed') ||
             lowerUrl.match(/\b(feeds?|rss)\./i) || lowerUrl.includes('anchor.fm') ||
             lowerUrl.includes('podcastfeeds.') || lowerUrl.includes('megaphone.fm') ||
             lowerUrl.includes('omnycontent.com') || lowerUrl.includes('podbean.com') ||
@@ -7578,6 +7579,99 @@
         setIsLoadingArtwork(false);
       };
 
+      // Shared episode chooser for the XML and JSON (rss2json) feed paths.
+      // items: [{ title, audioUrl, description, pubDate, link }] in feed order.
+      // Returns the same result shape as parseRSSAndFindEpisode.
+      const pickEpisodeFromItems = (items, episodeTitle, channelTitle, channelArtwork) => {
+        // Keep spaces for word-level matching
+        const normalizeTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+        const targetTitle = normalizeTitle(episodeTitle || '');
+        const targetStripped = targetTitle.replace(/\s/g, '');
+
+        let bestMatch = null;
+        let bestScore = 0;
+        let audioCount = 0;
+
+        items.forEach((item) => {
+          if (!item.audioUrl) return;
+          audioCount++;
+          const itemTitle = normalizeTitle(item.title || '');
+          const itemStripped = itemTitle.replace(/\s/g, '');
+          let score = 0;
+
+          // Substring match beats word overlap (stripped versions for robustness)
+          if (targetStripped && (itemStripped.includes(targetStripped) || targetStripped.includes(itemStripped))) {
+            score = 100;
+          } else {
+            targetTitle.split(/\s+/).forEach(word => {
+              if (word.length > 3 && itemTitle.includes(word)) score += 10;
+            });
+          }
+
+          // Prefer the earliest item when scores tie (usually most recent episode)
+          if (score > bestScore || !bestMatch) {
+            bestScore = score;
+            bestMatch = {
+              title: item.title || 'Unknown Episode',
+              audioUrl: item.audioUrl,
+              description: item.description || '',
+              artworkUrl: channelArtwork || '',
+              channelTitle: channelTitle || '',
+              pubDate: item.pubDate || '',
+              link: item.link || ''
+            };
+          }
+        });
+
+        const matchedByTitle = !!episodeTitle && bestScore > 0;
+        console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
+
+        if (!bestMatch) {
+          console.error(`[HJ:podcast] feed parsed but no episodes with audio found (${items.length} items)`);
+          return { ok: false, reason: 'no_audio_items', detail: `${items.length} items, 0 with audio` };
+        }
+        return { ok: true, episode: bestMatch, matchedByTitle, matchScore: bestScore };
+      };
+
+      // rss2json fetches the feed server-side and returns CORS-enabled JSON.
+      // Substack's bot protection 403s raw CORS proxies, but rss2json's fetcher
+      // is a recognized feed reader and gets through. Free tier returns only the
+      // ~10 newest items, so this is first choice only when no specific episode
+      // is wanted (direct feed paste) and a last resort otherwise.
+      // Returns a parseRSSAndFindEpisode-shaped result, or null if the fetch
+      // itself failed (so callers can fall back to the XML strategies).
+      const fetchFeedViaRss2json = async (feedUrl, episodeTitle) => {
+        try {
+          const response = await fetchWithTimeout(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`, 10000);
+          if (!response.ok) {
+            console.log(`[HJ:podcast] rss2json: http ${response.status}`);
+            return null;
+          }
+          const data = await response.json();
+          if (data.status !== 'ok' || !Array.isArray(data.items)) {
+            console.log('[HJ:podcast] rss2json: bad payload', data.status, data.message || '');
+            return null;
+          }
+          const items = data.items.map(item => {
+            const encUrl = item.enclosure?.link;
+            const encType = item.enclosure?.type || '';
+            const isAudio = encUrl && (encType.startsWith('audio') || !encType || /\.(mp3|m4a|ogg|aac|wav)(\?|$)/i.test(encUrl));
+            return {
+              title: item.title || '',
+              audioUrl: isAudio ? encUrl : null,
+              description: item.description || '',
+              pubDate: item.pubDate || '',
+              link: item.link || ''
+            };
+          });
+          console.log(`[HJ:podcast] rss2json: ok, ${items.length} items`);
+          return pickEpisodeFromItems(items, episodeTitle, data.feed?.title || '', data.feed?.image || '');
+        } catch (e) {
+          console.log(`[HJ:podcast] rss2json: error ${e?.message || e}`);
+          return null;
+        }
+      };
+
       // Parse RSS feed and find episode
       const parseRSSAndFindEpisode = async (feedUrl, episodeTitle) => {
         // Returns:
@@ -7590,6 +7684,16 @@
         // Latent Space and other Substack podcasts) intermittently fail through
         // a single proxy, so we try several formats including allorigins's JSON
         // wrapper which often succeeds when /raw is rate-limited.
+        //
+        // For a directly pasted Substack feed (no episode title to match deep in
+        // the archive), skip straight to rss2json instead of burning up to a
+        // minute of proxy timeouts on a host known to block them.
+        const preferJson = feedUrl.toLowerCase().includes('substack.com') && !episodeTitle;
+        if (preferJson) {
+          const viaJson = await fetchFeedViaRss2json(feedUrl, episodeTitle);
+          if (viaJson) return viaJson;
+        }
+
         const fetchStrategies = [
           { name: 'direct',          build: (u) => u, extract: (t) => t },
           { name: 'allorigins/raw',  build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, extract: (t) => t },
@@ -7635,6 +7739,11 @@
         }
 
         if (!xmlText) {
+          // Last resort: rss2json (unless it already ran above)
+          if (!preferJson) {
+            const viaJson = await fetchFeedViaRss2json(feedUrl, episodeTitle);
+            if (viaJson) return viaJson;
+          }
           console.error('[HJ:podcast] all fetch strategies failed for', feedUrl, attemptOutcomes);
           return { ok: false, reason: 'fetch_failed', detail: `${attemptOutcomes.length}/${fetchStrategies.length} strategies tried` };
         }
@@ -7677,87 +7786,16 @@
             return null;
           };
 
-          // Try to find matching episode by title
-          let bestMatch = null;
-          let bestScore = 0;
+          // Flatten to plain items, then match via the shared chooser
+          const plainItems = Array.from(items).map(item => ({
+            title: item.querySelector('title')?.textContent || '',
+            audioUrl: getAudioUrl(item),
+            description: item.querySelector('description')?.textContent || '',
+            pubDate: item.querySelector('pubDate')?.textContent || '',
+            link: item.querySelector('link')?.textContent || ''
+          }));
 
-          // Keep spaces for word-level matching
-          const normalizeTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-          const targetTitle = normalizeTitle(episodeTitle);
-
-          items.forEach((item, index) => {
-            const title = item.querySelector('title')?.textContent || '';
-            const audioUrl = getAudioUrl(item);
-
-            if (audioUrl) {
-              // Score based on title similarity
-              const itemTitle = normalizeTitle(title);
-              let score = 0;
-
-              // Check for substring match (using stripped versions for robustness)
-              const targetStripped = targetTitle.replace(/\s/g, '');
-              const itemStripped = itemTitle.replace(/\s/g, '');
-              if (itemStripped.includes(targetStripped) || targetStripped.includes(itemStripped)) {
-                score = 100;
-              } else {
-                // Count matching words (now works correctly since spaces are preserved)
-                const targetWords = targetTitle.split(/\s+/);
-                targetWords.forEach(word => {
-                  if (word.length > 3 && itemTitle.includes(word)) score += 10;
-                });
-              }
-
-              // Prefer first match if scores are equal (usually most recent)
-              if (score > bestScore || (score === bestScore && !bestMatch)) {
-                bestScore = score;
-
-                const description = item.querySelector('description')?.textContent || '';
-
-                bestMatch = {
-                  title: title,
-                  audioUrl: audioUrl,
-                  description: description,
-                  artworkUrl: channelArtwork,
-                  channelTitle: channelTitle,
-                  pubDate: item.querySelector('pubDate')?.textContent || '',
-                  link: item.querySelector('link')?.textContent || ''
-                };
-              }
-            }
-          });
-
-          // If no good match, return first episode with audio
-          if (!bestMatch && items.length > 0) {
-            for (const item of items) {
-              const audioUrl = getAudioUrl(item);
-              if (audioUrl) {
-                const description = item.querySelector('description')?.textContent || '';
-                bestMatch = {
-                  title: item.querySelector('title')?.textContent || 'Unknown Episode',
-                  audioUrl: audioUrl,
-                  description: description,
-                  artworkUrl: channelArtwork,
-                  channelTitle: channelTitle,
-                  pubDate: item.querySelector('pubDate')?.textContent || '',
-                  link: item.querySelector('link')?.textContent || ''
-                };
-                break;
-              }
-            }
-          }
-
-          // Count audio-bearing items for diagnostics
-          let audioCount = 0;
-          items.forEach(item => { if (getAudioUrl(item)) audioCount++; });
-          const matchedByTitle = !!episodeTitle && bestScore > 0;
-          console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
-
-          if (!bestMatch) {
-            console.error(`[HJ:podcast] feed parsed but no episodes with audio found (${items.length} items)`);
-            return { ok: false, reason: 'no_audio_items', detail: `${items.length} items, 0 with audio` };
-          }
-
-          return { ok: true, episode: bestMatch, matchedByTitle, matchScore: bestScore };
+          return pickEpisodeFromItems(plainItems, episodeTitle, channelTitle, channelArtwork);
         } catch (error) {
           console.error('[HJ:podcast] RSS parse error:', error);
           return { ok: false, reason: 'parse_error', detail: error?.message || 'unknown parse error' };
@@ -8440,7 +8478,7 @@
           } catch (e) {
             // Fetch failed, fall through to error
           }
-          showToast('Please enter a YouTube, Spotify, or RSS feed URL');
+          showToast('Please enter a YouTube, Spotify, Substack, or RSS feed URL');
         }
       };
 
@@ -9709,7 +9747,7 @@
             <div className="empty-state">
               <div className="empty-state-icon">🎙️</div>
               <h3>Media Player</h3>
-              <p>Paste a YouTube, X.com, Spotify, or podcast RSS feed link above, or load a local audio file to begin. The app will play it and let you take notes while you listen.</p>
+              <p>Paste a YouTube, X.com, Spotify, Substack, or podcast RSS feed link above, or load a local audio file to begin. The app will play it and let you take notes while you listen.</p>
             </div>
           )}
           <NotebookLMModal
