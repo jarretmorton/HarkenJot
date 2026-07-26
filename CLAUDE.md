@@ -98,6 +98,8 @@ the user actually used last.
 | `media_positions` | `harkenjot_media_positions` | Playback positions in media |
 | `session` | `harkenjot_session` | Last active tab/source (timestamped) for restore-on-reload |
 | `voice_uri` | `harkenjot_voice_uri` | Global TTS voice preference (voiceURI string) |
+| `net_hints` | `harkenjot_net_hints` | Network routing memory: last-working CORS proxy per host, learned custom-domain Substack hosts, show-name → RSS feed map (7-day TTL) |
+| `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
 
 ### Speech Recognition
 
@@ -232,6 +234,20 @@ Notes reference their parent source via `sourceId`. Position anchoring differs b
 - CORS fetch uses a chain of proxy fallbacks
 - Speech recognition falls back from Web Speech API to Whisper
 - User-facing errors shown via the `Toast` component
+
+### Network Fetch Conventions
+
+Every outbound fetch in the article/podcast pipelines must be bounded: use the
+shared top-level `fetchWithTimeout(url, ms, options)` (default 8 s; supports an
+external `options.signal` for race cancellation) — never a bare `fetch()`.
+Multi-proxy attempts go through `raceStaggered(taskFns, {staggerMs})`, which
+starts task N after N×stagger (2–2.5 s), lets the first non-null result win, and
+aborts the losers — polite to free CORS proxies while bounding worst-case
+latency. `netHints` (persisted under the `net_hints` key) remembers the
+last-working proxy per host so it is tried first next time. In `fetchContent`'s
+article fallbacks, Wayback/AMP/WordPress/Jina run concurrently but are awaited
+in preference order; Jina is only started after tier-1 extraction fails (its
+keyless tier is rate-limited).
 
 ## Making Changes
 

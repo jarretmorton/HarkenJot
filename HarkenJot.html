@@ -2401,15 +2401,135 @@
       return { triggered: true, query };
     };
 
-    // Fetch with a hard timeout so a hung tier can't stall the lookup; callers fall through on reject.
-    const fetchWithTimeout = async (url, ms = 3000) => {
+    // Fetch with a hard timeout so a hung request can't stall its caller. Several public CORS
+    // proxies hang instead of failing fast; capping each attempt keeps fallback chains moving.
+    // Accepts standard fetch options; an external options.signal is chained onto the internal
+    // AbortController so a raceStaggered winner can cancel losing attempts.
+    const fetchWithTimeout = async (url, ms = 8000, options = {}) => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), ms);
+      const onOuterAbort = () => ctrl.abort();
+      if (options.signal) options.signal.addEventListener('abort', onOuterAbort, { once: true });
       try {
-        return await fetch(url, { signal: ctrl.signal });
+        return await fetch(url, { ...options, signal: ctrl.signal });
       } finally {
         clearTimeout(timer);
+        if (options.signal) options.signal.removeEventListener('abort', onOuterAbort);
       }
+    };
+
+    // Runs priority-ordered async tasks with a stagger: task 0 starts immediately, task N after
+    // N*staggerMs. First non-null resolution wins and aborts the losers via their AbortSignal;
+    // resolves null once every task has settled without a winner. Hand-rolled instead of
+    // Promise.any so a null/invalid result counts as a failure. The stagger keeps us from
+    // hammering every free CORS proxy at once while still bounding a slow first choice.
+    const raceStaggered = (taskFns, { staggerMs = 2500 } = {}) =>
+      new Promise((resolve) => {
+        if (!taskFns.length) { resolve(null); return; }
+        let settled = false;
+        let pending = taskFns.length;
+        const ctrls = taskFns.map(() => new AbortController());
+        const timers = [];
+        const finish = (val) => {
+          if (settled) return;
+          settled = true;
+          timers.forEach(clearTimeout);
+          ctrls.forEach(c => c.abort());
+          resolve(val);
+        };
+        taskFns.forEach((fn, i) => {
+          const start = () => Promise.resolve()
+            .then(() => (settled ? null : fn(ctrls[i].signal)))
+            .catch(() => null)
+            .then((res) => {
+              if (res != null) finish(res);
+              else if (--pending === 0) finish(null);
+            });
+          if (i === 0) start();
+          else timers.push(setTimeout(start, i * staggerMs));
+        });
+      });
+
+    // Small cross-session memory for network routing: which CORS proxy last worked per host,
+    // which custom domains turned out to be Substacks, and show-name → RSS feed mappings.
+    // Persisted best-effort under the HJStore 'net_hints' key; losing it only costs speed.
+    const SHOW_FEED_TTL = 7 * 24 * 3600 * 1000;
+    const netHints = {
+      data: null,
+      load() {
+        if (!this.data) {
+          const stored = HJStore.get('net_hints');
+          this.data = (stored && typeof stored === 'object') ? stored : {};
+          this.data.proxyByHost = this.data.proxyByHost || {};
+          this.data.substackHosts = this.data.substackHosts || ['latent.space', 'astralcodexten.com'];
+          this.data.feedByShow = this.data.feedByShow || {};
+        }
+        return this.data;
+      },
+      save() { try { HJStore.set('net_hints', this.data).catch(() => {}); } catch (e) { /* best-effort */ } },
+      preferredProxy(host) { return this.load().proxyByHost[host] || null; },
+      recordProxy(host, name) {
+        if (!host) return;
+        const d = this.load();
+        if (d.proxyByHost[host] === name) return;
+        d.proxyByHost[host] = name;
+        const keys = Object.keys(d.proxyByHost);
+        if (keys.length > 50) delete d.proxyByHost[keys[0]];
+        this.save();
+      },
+      isSubstackHost(host) { return this.load().substackHosts.includes(host); },
+      recordSubstackHost(host) {
+        const d = this.load();
+        if (!d.substackHosts.includes(host)) { d.substackHosts.push(host); this.save(); }
+      },
+      feedForShow(showName) {
+        if (!showName) return null;
+        const entry = this.load().feedByShow[showName.toLowerCase().trim()];
+        return (entry && Date.now() - entry.ts < SHOW_FEED_TTL) ? entry : null;
+      },
+      recordShowFeed(showName, info) {
+        if (!showName || !info || !info.feedUrl) return;
+        const d = this.load();
+        d.feedByShow[showName.toLowerCase().trim()] = { ...info, ts: Date.now() };
+        const keys = Object.keys(d.feedByShow);
+        if (keys.length > 50) delete d.feedByShow[keys[0]];
+        this.save();
+      }
+    };
+
+    // Reorder a proxy list so the remembered last-working proxy for this host goes first.
+    const orderByPreferred = (list, host) => {
+      const pref = netHints.preferredProxy(host);
+      if (!pref) return list;
+      const i = list.findIndex(p => p.name === pref);
+      return i > 0 ? [list[i], ...list.slice(0, i), ...list.slice(i + 1)] : list;
+    };
+
+    // Podcast feed cache: episode lists keyed by feed URL so loading another episode of a
+    // known show skips the refetch + reparse. 15 feeds LRU, 100 items each, 12h TTL.
+    const FEED_CACHE_TTL = 12 * 3600 * 1000;
+    const getCachedFeed = (feedUrl) => {
+      try {
+        const cache = HJStore.get('feed_cache');
+        return (cache && cache[feedUrl]) || null;
+      } catch (e) { return null; }
+    };
+    const isFeedCacheFresh = (entry) => !!entry && (Date.now() - entry.ts) < FEED_CACHE_TTL;
+    const putCachedFeed = (feedUrl, payload) => {
+      try {
+        const cache = HJStore.get('feed_cache') || {};
+        const items = (payload.items || []).slice(0, 100).map(it => ({
+          ...it,
+          description: (it.description || '').slice(0, 500)
+        }));
+        cache[feedUrl] = { ...payload, items, ts: Date.now() };
+        const urls = Object.keys(cache);
+        if (urls.length > 15) {
+          urls.sort((a, b) => (cache[a].ts || 0) - (cache[b].ts || 0));
+          delete cache[urls[0]];
+        }
+        HJStore.set('feed_cache', cache).catch(() => {});
+      } catch (e) { /* best-effort */ }
     };
 
     // Convert HTML fragments (Wiktionary definitions carry markup) to plain text. DOMParser is
@@ -2432,7 +2552,7 @@
 
       // Tier 1 — Wiktionary
       try {
-        const res = await fetchWithTimeout(`https://en.wiktionary.org/api/rest_v1/page/definition/${slug(term)}`);
+        const res = await fetchWithTimeout(`https://en.wiktionary.org/api/rest_v1/page/definition/${slug(term)}`, 3000);
         if (res.ok) {
           const data = await res.json();
           const entries = Array.isArray(data.en) ? data.en : (data[Object.keys(data)[0]] || null);
@@ -2456,7 +2576,7 @@
       const variants = titleCase !== term.trim() ? [term, titleCase] : [term];
       for (const variant of variants) {
         try {
-          const res = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug(variant)}`);
+          const res = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${slug(variant)}`, 3000);
           if (res.ok) {
             const data = await res.json();
             if (data.extract) return { answer: data.extract, source: 'Wikipedia' };
@@ -2539,7 +2659,7 @@
       _dbName: 'harkenjot',
       _store: 'kv',
       _handleStore: 'audioHandles',
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri'],
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'net_hints', 'feed_cache'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
@@ -2547,6 +2667,8 @@
         media_positions: 'harkenjot_media_positions',
         session: 'harkenjot_session',
         voice_uri: 'harkenjot_voice_uri',
+        net_hints: 'harkenjot_net_hints',
+        feed_cache: 'harkenjot_feed_cache',
       },
 
       _open() {
@@ -3433,7 +3555,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.42.3</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.43.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4786,7 +4908,7 @@
           // Try direct fetch first
           try {
             console.log('Trying direct PDF fetch...');
-            const response = await fetch(pdfUrl, { mode: 'cors' });
+            const response = await fetchWithTimeout(pdfUrl, 10000, { mode: 'cors' });
             if (response.ok) {
               pdfData = await response.arrayBuffer();
               console.log('Direct fetch succeeded');
@@ -4801,7 +4923,7 @@
               try {
                 const proxyUrl = proxyFn(pdfUrl);
                 console.log('Trying proxy:', proxyUrl);
-                const response = await fetch(proxyUrl);
+                const response = await fetchWithTimeout(proxyUrl, 15000);
                 if (response.ok) {
                   pdfData = await response.arrayBuffer();
                   console.log('Proxy fetch succeeded:', pdfData.byteLength, 'bytes');
@@ -4916,11 +5038,20 @@
               return text;
             };
 
-            for (const proxy of corsProxies) {
+            // Staggered race instead of a serial loop: the remembered last-working proxy for
+            // this host starts first, the next proxy joins every 2.5s, first good body wins
+            // and aborts the rest. Bounds the chain at ~13s where a hung proxy used to stall
+            // it indefinitely.
+            const targetHost = (() => {
+              try { return new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname; }
+              catch (e) { return ''; }
+            })();
+            const orderedProxies = orderByPreferred(corsProxies, targetHost);
+            return await raceStaggered(orderedProxies.map((proxy) => async (signal) => {
               try {
                 console.log(`Trying ${proxy.name} proxy for ${targetUrl}...`);
                 const proxyUrl = proxy.url(targetUrl);
-                const response = await fetch(proxyUrl);
+                const response = await fetchWithTimeout(proxyUrl, 8000, { signal });
                 if (!response.ok) throw new Error(`${proxy.name} returned ${response.status}`);
                 let html;
                 if (proxy.name === 'allorigins') {
@@ -4938,14 +5069,16 @@
                 }
                 if (html && html.length > 100 && !looksLikeBinary(html)) {
                   console.log(`${proxy.name} succeeded`);
+                  netHints.recordProxy(targetHost, proxy.name);
                   return html;
                 }
                 if (looksLikeBinary(html)) throw new Error(`${proxy.name} returned compressed/binary content`);
+                return null;
               } catch (error) {
                 console.log(`${proxy.name} failed:`, error.message);
+                return null;
               }
-            }
-            return null;
+            }), { staggerMs: 2500 });
           };
 
           // Helper: try to extract article content from HTML, returns null if insufficient
@@ -4974,7 +5107,7 @@
 
               let raw = null;
               try {
-                const response = await fetch(apiUrl);
+                const response = await fetchWithTimeout(apiUrl, 5000);
                 if (response.ok) raw = await response.text();
                 else console.log(`[HJ:article] WordPress API direct: http ${response.status}`);
               } catch (e) {
@@ -5016,7 +5149,7 @@
           const tryJinaReader = async (articleUrl) => {
             try {
               const target = articleUrl.startsWith('http') ? articleUrl : 'https://' + articleUrl;
-              const response = await fetch(`https://r.jina.ai/${target}`);
+              const response = await fetchWithTimeout(`https://r.jina.ai/${target}`, 25000);
               if (!response.ok) {
                 console.log(`[HJ:article] Jina reader: http ${response.status}`);
                 return null;
@@ -5075,7 +5208,7 @@
             // Direct fetch first (these APIs send CORS headers), then proxies.
             const fetchJson = async (apiUrl) => {
               try {
-                const response = await fetch(apiUrl);
+                const response = await fetchWithTimeout(apiUrl, 5000);
                 if (response.ok) return await response.json();
                 console.log(`[HJ:x] direct: http ${response.status} for ${apiUrl}`);
               } catch (e) {
@@ -5290,7 +5423,7 @@
                   const gqlUrl = `${origin}/graphql?query=${encodeURIComponent(gqlQuery)}`;
                   for (const proxy of gqlProxies) {
                     try {
-                      const response = await fetch(proxy.wrap(gqlUrl));
+                      const response = await fetchWithTimeout(proxy.wrap(gqlUrl), 8000);
                       if (!response.ok) {
                         console.log(`GraphQL via ${proxy.name} (${origin}) returned ${response.status}`);
                         continue;
@@ -5357,9 +5490,24 @@
               slug = standardMatch[1];
             }
             if (slug) {
-              showToast('Trying Substack API...');
+              // Only known Substack hosts get the full proxy chain. Plenty of
+              // non-Substack blogs use /p/<slug> paths; an unknown custom domain
+              // gets a single cheap probe, and is remembered on success.
+              const pageHost = u.hostname.replace(/^www\./, '');
+              const isKnownSubstack = !!appShareMatch ||
+                pageHost.endsWith('.substack.com') || pageHost === 'open.substack.com' ||
+                netHints.isSubstackHost(pageHost);
               const apiUrl = `${apiOrigin}/api/v1/posts/${slug}`;
-              const apiResponse = await fetchHtmlViaProxies(apiUrl);
+              let apiResponse = null;
+              if (isKnownSubstack) {
+                showToast('Trying Substack API...');
+                apiResponse = await fetchHtmlViaProxies(apiUrl);
+              } else {
+                try {
+                  const probe = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(apiUrl)}`, 5000);
+                  if (probe.ok) apiResponse = await probe.text();
+                } catch (e) { /* not a Substack — fall through to the standard chain */ }
+              }
               if (apiResponse) {
                 try {
                   const data = JSON.parse(apiResponse);
@@ -5368,6 +5516,7 @@
                     const wrappedHtml = `<html><body>${bodyHtml}</body></html>`;
                     const extracted = tryExtractArticle(wrappedHtml);
                     if (extracted) {
+                      if (!isKnownSubstack) netHints.recordSubstackHost(pageHost);
                       const title = data.title || extracted.title;
                       const { text: bodyText } = extracted;
                       const sentences = splitIntoSentences(bodyText);
@@ -5441,62 +5590,50 @@
 
           let extracted = tryExtractArticle(html);
 
-          // Strategy 2: Try Wayback Machine (archive.org has CORS headers, no proxy needed)
+          // Strategies 2–5, run concurrently once tier-1 extraction fails, but awaited
+          // in the original preference order (Wayback > AMP > WordPress > Jina) so the
+          // result is identical to the old serial chain — only the wall time changes
+          // (max of the tiers instead of their sum). Jina is deliberately NOT started
+          // before this point: its keyless tier is rate-limited, and the proxies handle
+          // most articles without it.
           if (!extracted) {
-            try {
-              console.log('Trying Wayback Machine...');
-              showToast('Trying archive.org...');
-              const archiveUrl = `https://web.archive.org/web/2/${url}`;
-              const archiveResponse = await fetch(archiveUrl);
-              if (archiveResponse.ok) {
-                const archiveHtml = await archiveResponse.text();
-                extracted = tryExtractArticle(archiveHtml);
-                if (extracted) console.log('Wayback Machine succeeded');
-              }
-            } catch (e) {
-              console.log('Wayback Machine failed:', e.message);
-            }
-          }
+            showToast('Trying fallback sources...');
 
-          // Strategy 3: Try Google AMP version via proxies (simpler HTML, often bypasses paywalls)
-          if (!extracted) {
-            const cleanUrl = url.replace(/\/+$/, '');
-            const ampUrl = cleanUrl + '/amp/';
-            if (ampUrl !== url) {
+            // Strategy 2: Wayback Machine (archive.org has CORS headers, no proxy needed)
+            const waybackP = (async () => {
               try {
-                console.log('Trying AMP version...');
-                showToast('Trying AMP version...');
-                const ampHtml = await fetchHtmlViaProxies(ampUrl);
-                extracted = tryExtractArticle(ampHtml);
-                if (extracted) console.log('AMP version succeeded');
+                console.log('Trying Wayback Machine...');
+                const archiveResponse = await fetchWithTimeout(`https://web.archive.org/web/2/${url}`, 10000);
+                if (!archiveResponse.ok) return null;
+                const result = tryExtractArticle(await archiveResponse.text());
+                if (result) console.log('Wayback Machine succeeded');
+                return result;
               } catch (e) {
-                console.log('AMP version failed:', e.message);
+                console.log('Wayback Machine failed:', e.message);
+                return null;
               }
-            }
-          }
+            })();
 
-          // Strategy 4: WordPress REST API. Many article sites are WordPress;
-          // its CORS-enabled API often succeeds where every proxy failed.
-          if (!extracted && !wpApiAlreadyFailed) {
-            console.log('Trying WordPress REST API...');
-            showToast('Trying WordPress API...');
-            const wp = await tryWordPressApi(url);
-            if (wp) {
-              extracted = wp;
-              console.log('WordPress REST API succeeded');
-            }
-          }
+            // Strategy 3: Google AMP version via proxies (simpler HTML, often bypasses paywalls)
+            const ampUrl = url.replace(/\/+$/, '') + '/amp/';
+            const ampP = (ampUrl !== url)
+              ? fetchHtmlViaProxies(ampUrl).then(tryExtractArticle).catch(() => null)
+              : Promise.resolve(null);
 
-          // Strategy 5: Jina Reader — handles bot-protected pages (Cloudflare
-          // etc.) that defeat the proxies, archive.org, AMP, and site APIs.
-          if (!extracted) {
-            console.log('Trying Jina reader...');
-            showToast('Trying reader service...');
-            const jina = await tryJinaReader(url);
-            if (jina) {
-              extracted = jina;
-              console.log('Jina reader succeeded');
-            }
+            // Strategy 4: WordPress REST API. Many article sites are WordPress;
+            // its CORS-enabled API often succeeds where every proxy failed.
+            const wpP = wpApiAlreadyFailed
+              ? Promise.resolve(null)
+              : tryWordPressApi(url).catch(() => null);
+
+            // Strategy 5: Jina Reader — handles bot-protected pages (Cloudflare
+            // etc.) that defeat the proxies, archive.org, AMP, and site APIs.
+            const jinaP = tryJinaReader(url).catch(() => null);
+
+            extracted = await waybackP;
+            if (!extracted) { extracted = await ampP; if (extracted) console.log('AMP version succeeded'); }
+            if (!extracted) { extracted = await wpP; if (extracted) console.log('WordPress REST API succeeded'); }
+            if (!extracted) { extracted = await jinaP; if (extracted) console.log('Jina reader succeeded'); }
           }
 
           // Google Webcache (webcache.googleusercontent.com) was retired in 2024 and
@@ -7044,7 +7181,7 @@
           let data = null;
           for (const wrap of transports) {
             try {
-              const response = await fetch(wrap(endpoint));
+              const response = await fetchWithTimeout(wrap(endpoint), 5000);
               if (!response.ok) continue;
               data = await response.json();
               if (data) break;
@@ -7139,20 +7276,15 @@
         }
       };
 
-      // Several public CORS proxies hang instead of failing fast; cap each
-      // attempt so the fallback chain actually progresses.
-      const fetchWithTimeout = (url, ms = 8000) => {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), ms);
-        return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
-      };
+      // Uses the shared top-level fetchWithTimeout (same 8s default this local
+      // copy used to have) so proxy and API attempts are all bounded.
 
       // Fetch Spotify metadata using oEmbed API
       const fetchSpotifyMetadata = async (spotifyUrl) => {
         try {
           const cleanUrl = cleanSpotifyUrl(spotifyUrl);
           const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
-          const response = await fetch(oembedUrl);
+          const response = await fetchWithTimeout(oembedUrl, 5000);
           if (!response.ok) throw new Error('Failed to fetch Spotify metadata');
           const data = await response.json();
 
@@ -7228,15 +7360,27 @@
           { url: cleanUrl, kind: 'page', maxProxies: proxies.length }
         ];
 
+        // Partial results (one of the two fields) from any attempt are merged into
+        // bestResult; a full {episodeTitle, showName} wins the race outright.
         let bestResult = null;
-        for (const target of targets) {
-        for (let i = 0; i < target.maxProxies; i++) {
+        const mergePartial = (p) => {
+          if (!p || (!p.episodeTitle && !p.showName)) return;
+          if (!bestResult) bestResult = { ...p };
+          else bestResult = {
+            episodeTitle: bestResult.episodeTitle || p.episodeTitle,
+            showName: bestResult.showName || p.showName
+          };
+        };
+
+        // One attempt = one proxy against one target. Returns a full result (which
+        // wins the race), or null after recording any partial via mergePartial.
+        const scrapeAttempt = async (target, i, signal) => {
           const label = `${target.kind}-scrape proxy ${i}`;
           try {
-            const response = await fetchWithTimeout(proxies[i](target.url));
+            const response = await fetchWithTimeout(proxies[i](target.url), 8000, { signal });
             if (!response.ok) {
               console.log(`[HJ:podcast] ${label}: http ${response.status}`);
-              continue;
+              return null;
             }
             let html = await response.text();
             // allorigins/get returns JSON {contents}
@@ -7245,7 +7389,7 @@
             }
             if (!html || html.length < 200) {
               console.log(`[HJ:podcast] ${label}: short response (${html?.length || 0} bytes)`);
-              continue;
+              return null;
             }
 
             const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -7254,7 +7398,7 @@
               const nextData = doc.querySelector('script#__NEXT_DATA__');
               if (!nextData) {
                 console.log(`[HJ:podcast] ${label}: no __NEXT_DATA__`);
-                continue;
+                return null;
               }
               try {
                 const data = JSON.parse(nextData.textContent);
@@ -7267,11 +7411,11 @@
                 if (isGarbageMeta(showName)) showName = null;
                 console.log(`[HJ:podcast] ${label}:`, { episodeTitle, showName });
                 if (episodeTitle && showName) return { episodeTitle, showName };
-                if ((episodeTitle || showName) && !bestResult) bestResult = { episodeTitle, showName };
+                mergePartial({ episodeTitle, showName });
               } catch (e) {
                 console.log(`[HJ:podcast] ${label}: bad __NEXT_DATA__ JSON`);
               }
-              continue;
+              return null;
             }
 
             let episodeTitle = null;
@@ -7284,7 +7428,7 @@
             // error page whose <title> would only yield junk.
             if (jsonLdScripts.length === 0 && !doc.querySelector('meta[property="og:title"]')) {
               console.log(`[HJ:podcast] ${label}: bot-block/error page suspected`);
-              continue;
+              return null;
             }
 
             for (const script of jsonLdScripts) {
@@ -7369,21 +7513,23 @@
             if (showName && episodeTitle) {
               return { episodeTitle, showName };
             }
-            // Track partial result; keep trying in case a later attempt has both fields
-            if ((episodeTitle || showName) && !bestResult) {
-              bestResult = { episodeTitle, showName };
-            } else if (bestResult) {
-              bestResult = {
-                episodeTitle: bestResult.episodeTitle || episodeTitle,
-                showName: bestResult.showName || showName
-              };
-              if (bestResult.episodeTitle && bestResult.showName) return bestResult;
-            }
+            // Track the partial; if merged partials now cover both fields, win with that.
+            mergePartial({ episodeTitle, showName });
+            return (bestResult && bestResult.episodeTitle && bestResult.showName) ? bestResult : null;
           } catch (e) {
             console.log(`[HJ:podcast] ${label}: error ${e?.message || e}`);
-            continue;
+            return null;
           }
-        }
+        };
+
+        // Staggered race per target (embed first — its __NEXT_DATA__ is the most
+        // reliable source). First full result wins and aborts the other proxies.
+        for (const target of targets) {
+          const attempts = Array.from({ length: target.maxProxies }, (_, i) =>
+            (signal) => scrapeAttempt(target, i, signal));
+          const winner = await raceStaggered(attempts, { staggerMs: 2500 });
+          if (winner) return winner;
+          if (bestResult && bestResult.episodeTitle && bestResult.showName) return bestResult;
         }
         console.log('[HJ:podcast] page-scrape final:', bestResult || 'no metadata');
         return bestResult;
@@ -7404,12 +7550,25 @@
         }
         const showNorm = showName ? normalizeForMatch(showName) : '';
 
+        // Show→feed cache: a show we resolved within the last week skips both
+        // iTunes round-trips entirely.
+        const rememberedFeed = netHints.feedForShow(showName);
+        if (rememberedFeed) {
+          console.log('[HJ:podcast] show cache hit', { show: showName, feedUrl: rememberedFeed.feedUrl });
+          return {
+            feedUrl: rememberedFeed.feedUrl,
+            podcastName: rememberedFeed.podcastName,
+            artworkUrl: rememberedFeed.artworkUrl,
+            collectionId: rememberedFeed.collectionId
+          };
+        }
+
         try {
           // Strategy 1: Search iTunes for the episode directly (most reliable)
           if (episodeTitle) {
             try {
               const episodeQuery = encodeURIComponent(episodeTitle);
-              const episodeResponse = await fetch(`https://itunes.apple.com/search?term=${episodeQuery}&entity=podcastEpisode&limit=15`);
+              const episodeResponse = await fetchWithTimeout(`https://itunes.apple.com/search?term=${episodeQuery}&entity=podcastEpisode&limit=15`, 5000);
               if (episodeResponse.ok) {
                 const episodeData = await episodeResponse.json();
                 if (episodeData.results && episodeData.results.length > 0) {
@@ -7447,12 +7606,22 @@
                   const MIN_EPISODE_SCORE = 30;
                   if (bestResult && bestScore >= MIN_EPISODE_SCORE) {
                     console.log('[HJ:podcast] iTunes episode search match', { score: bestScore, show: bestResult.collectionName, feedUrl: bestResult.feedUrl });
-                    return {
+                    const found = {
                       feedUrl: bestResult.feedUrl,
                       podcastName: bestResult.collectionName,
                       artworkUrl: bestResult.artworkUrl600 || bestResult.artworkUrl100,
-                      collectionId: bestResult.collectionId
+                      collectionId: bestResult.collectionId,
+                      // Exact (100) or substring (80) title match — safe to act on
+                      // without waiting for a scraped show name.
+                      quickConfident: bestScore >= 80
                     };
+                    // Only remember the show mapping when the result's podcast
+                    // actually matches the show name we were given.
+                    const collNorm = normalizeForMatch(bestResult.collectionName || '');
+                    if (showNorm && collNorm && (collNorm === showNorm || collNorm.includes(showNorm) || showNorm.includes(collNorm))) {
+                      netHints.recordShowFeed(showName, found);
+                    }
+                    return found;
                   }
                   console.log('[HJ:podcast] iTunes episode search: best score', bestScore, 'below', MIN_EPISODE_SCORE, '— rejecting', bestResult?.collectionName);
                 }
@@ -7472,7 +7641,7 @@
           for (const candidate of showCandidates) {
             try {
               const searchQuery = encodeURIComponent(candidate);
-              const response = await fetch(`https://itunes.apple.com/search?term=${searchQuery}&media=podcast&limit=5`);
+              const response = await fetchWithTimeout(`https://itunes.apple.com/search?term=${searchQuery}&media=podcast&limit=5`, 5000);
               if (!response.ok) continue;
               const data = await response.json();
               const candNorm = normalizeForMatch(candidate);
@@ -7500,12 +7669,14 @@
           const MIN_SHOW_SCORE = 50; // exact, substring, or strong word overlap
           if (bestShow && bestShowScore >= MIN_SHOW_SCORE) {
             console.log('[HJ:podcast] iTunes show search match', { query: bestQuery, score: bestShowScore, show: bestShow.collectionName, feedUrl: bestShow.feedUrl });
-            return {
+            const found = {
               feedUrl: bestShow.feedUrl,
               podcastName: bestShow.collectionName,
               artworkUrl: bestShow.artworkUrl600 || bestShow.artworkUrl100,
               collectionId: bestShow.collectionId
             };
+            if (showName) netHints.recordShowFeed(showName, found);
+            return found;
           }
           console.log('[HJ:podcast] iTunes show search: no result above threshold', { bestScore: bestShowScore, bestShow: bestShow?.collectionName, query: bestQuery });
           return null;
@@ -7524,7 +7695,7 @@
       const fetchEpisodeFromITunes = async (collectionId, episodeTitle) => {
         if (!collectionId) return null;
         try {
-          const response = await fetch(`https://itunes.apple.com/lookup?id=${collectionId}&entity=podcastEpisode&limit=200`);
+          const response = await fetchWithTimeout(`https://itunes.apple.com/lookup?id=${collectionId}&entity=podcastEpisode&limit=200`, 8000);
           if (!response.ok) return null;
           const data = await response.json();
           const episodes = (data.results || []).filter(r => r.kind === 'podcast-episode' && r.episodeUrl);
@@ -7597,7 +7768,7 @@
 
         try {
           const searchQuery = encodeURIComponent(searchTerm);
-          const response = await fetch(`https://itunes.apple.com/search?term=${searchQuery}&media=podcast&limit=5`);
+          const response = await fetchWithTimeout(`https://itunes.apple.com/search?term=${searchQuery}&media=podcast&limit=5`, 5000);
           if (!response.ok) throw new Error('iTunes search failed');
           const data = await response.json();
 
@@ -7715,6 +7886,7 @@
             };
           });
           console.log(`[HJ:podcast] rss2json: ok, ${items.length} items`);
+          putCachedFeed(feedUrl, { channelTitle: data.feed?.title || '', channelArtwork: data.feed?.image || '', items });
           return pickEpisodeFromItems(items, episodeTitle, data.feed?.title || '', data.feed?.image || '');
         } catch (e) {
           console.log(`[HJ:podcast] rss2json: error ${e?.message || e}`);
@@ -7738,6 +7910,19 @@
         // For a directly pasted Substack feed (no episode title to match deep in
         // the archive), skip straight to rss2json instead of burning up to a
         // minute of proxy timeouts on a host known to block them.
+        // Feed cache: reuse a recently parsed episode list before touching the
+        // network. With an episodeTitle, accept a hit only when the title actually
+        // matched (a brand-new episode may postdate the cache); with no title
+        // ("latest episode"), trust only a fresh cache.
+        const cached = getCachedFeed(feedUrl);
+        if (cached) {
+          const fromCache = pickEpisodeFromItems(cached.items || [], episodeTitle, cached.channelTitle, cached.channelArtwork);
+          if (fromCache.ok && (episodeTitle ? fromCache.matchedByTitle : isFeedCacheFresh(cached))) {
+            console.log('[HJ:podcast] feed cache hit for', feedUrl);
+            return fromCache;
+          }
+        }
+
         const preferJson = feedUrl.toLowerCase().includes('substack.com') && !episodeTitle;
         if (preferJson) {
           const viaJson = await fetchFeedViaRss2json(feedUrl, episodeTitle);
@@ -7761,38 +7946,54 @@
 
         const isXmlFeed = (text) => text && (text.includes('<channel') || text.includes('<feed') || text.trimStart().startsWith('<?xml'));
 
-        let xmlText = null;
+        // Staggered race instead of the old serial loop: 'direct' keeps a 2s head
+        // start (≈ the old direct-first preference), the remembered last-working
+        // proxy for this feed host goes next, and the first XML body wins and
+        // aborts the rest. Bounds the fetch tier at ~22s where the serial chain
+        // could take 60s+.
         const attemptOutcomes = [];
-        for (let i = 0; i < fetchStrategies.length; i++) {
-          const strategy = fetchStrategies[i];
+        const feedHost = (() => { try { return new URL(feedUrl).hostname; } catch (e) { return ''; } })();
+        const [directStrategy, ...proxyStrategies] = fetchStrategies;
+        const orderedStrategies = [directStrategy, ...orderByPreferred(proxyStrategies, feedHost)];
+        const xmlText = await raceStaggered(orderedStrategies.map((strategy, i) => async (signal) => {
           try {
-            const response = await fetchWithTimeout(strategy.build(feedUrl));
+            const response = await fetchWithTimeout(strategy.build(feedUrl), 8000, { signal });
             if (!response.ok) {
               console.log(`[HJ:podcast] fetch ${i} (${strategy.name}): http ${response.status}`);
               attemptOutcomes.push(`${strategy.name}:http${response.status}`);
-              continue;
+              return null;
             }
             const raw = await response.text();
             const text = strategy.extract(raw);
             if (isXmlFeed(text)) {
               console.log(`[HJ:podcast] fetch ${i} (${strategy.name}): ok ${text.length} bytes`);
               attemptOutcomes.push(`${strategy.name}:ok`);
-              xmlText = text;
-              break;
+              if (strategy.name !== 'direct') netHints.recordProxy(feedHost, strategy.name);
+              return text;
             }
             console.log(`[HJ:podcast] fetch ${i} (${strategy.name}): non-xml ${raw.length} bytes`);
             attemptOutcomes.push(`${strategy.name}:non-xml`);
+            return null;
           } catch (e) {
             console.log(`[HJ:podcast] fetch ${i} (${strategy.name}): error ${e?.message || e}`);
             attemptOutcomes.push(`${strategy.name}:err`);
+            return null;
           }
-        }
+        }), { staggerMs: 2000 });
 
         if (!xmlText) {
           // Last resort: rss2json (unless it already ran above)
           if (!preferJson) {
             const viaJson = await fetchFeedViaRss2json(feedUrl, episodeTitle);
             if (viaJson) return viaJson;
+          }
+          // Better stale than broken: an expired cache entry beats a hard failure
+          if (cached) {
+            const fromStale = pickEpisodeFromItems(cached.items || [], episodeTitle, cached.channelTitle, cached.channelArtwork);
+            if (fromStale.ok) {
+              console.log('[HJ:podcast] using stale feed cache after fetch failure');
+              return fromStale;
+            }
           }
           console.error('[HJ:podcast] all fetch strategies failed for', feedUrl, attemptOutcomes);
           return { ok: false, reason: 'fetch_failed', detail: `${attemptOutcomes.length}/${fetchStrategies.length} strategies tried` };
@@ -7845,6 +8046,7 @@
             link: item.querySelector('link')?.textContent || ''
           }));
 
+          putCachedFeed(feedUrl, { channelTitle, channelArtwork, items: plainItems });
           return pickEpisodeFromItems(plainItems, episodeTitle, channelTitle, channelArtwork);
         } catch (error) {
           console.error('[HJ:podcast] RSS parse error:', error);
@@ -7949,7 +8151,9 @@
               audioUrl: episode.audioUrl,
               showName: rssInfo.podcastName,
               artworkUrl: rssInfo.artworkUrl,
-              link: episode.link || url
+              link: episode.link || url,
+              feedUrl: rssInfo.feedUrl,
+              collectionId: rssInfo.collectionId
             });
 
             setUrl('');
@@ -7961,19 +8165,36 @@
           // Step 1b: If oEmbed gave us no usable show name (e.g. for Latent
           // Space and many other modern podcasts where the oEmbed title is
           // just the episode title), scrape the Spotify episode page for
-          // reliable show metadata via JSON-LD.
+          // reliable show metadata via JSON-LD. The scrape is slow (proxy
+          // round-trips), so it now runs concurrently with a direct iTunes
+          // episode-title search; an exact/substring iTunes match skips the
+          // scrape entirely. Weaker matches still wait for the scraped show
+          // name — it feeds the collection-match boost that guards against
+          // loading the wrong podcast.
+          let rssInfo = null;
+          let quickSearchResult; // undefined = fast path never attempted
           if (!metadata || metadata.showNameUncertain) {
             showToast('Looking up show details...');
-            const pageMeta = await fetchSpotifyPageMetadata(url);
-            if (pageMeta && (pageMeta.showName || pageMeta.episodeTitle)) {
-              const mergedTitle = pageMeta.episodeTitle || metadata?.title || pageMeta.showName || '';
-              const mergedShow = pageMeta.showName || metadata?.showName || mergedTitle;
-              metadata = {
-                title: mergedTitle,
-                showName: mergedShow,
-                thumbnailUrl: metadata?.thumbnailUrl,
-                showNameUncertain: !pageMeta.showName
-              };
+            const scrapeP = fetchSpotifyPageMetadata(url).catch(() => null);
+            if (metadata?.title) {
+              quickSearchResult = await searchForRSSFeed(null, metadata.title).catch(() => null);
+              if (quickSearchResult && quickSearchResult.quickConfident) {
+                console.log('[HJ:podcast] fast path: confident iTunes episode match — skipping page scrape');
+                rssInfo = quickSearchResult;
+              }
+            }
+            if (!rssInfo) {
+              const pageMeta = await scrapeP;
+              if (pageMeta && (pageMeta.showName || pageMeta.episodeTitle)) {
+                const mergedTitle = pageMeta.episodeTitle || metadata?.title || pageMeta.showName || '';
+                const mergedShow = pageMeta.showName || metadata?.showName || mergedTitle;
+                metadata = {
+                  title: mergedTitle,
+                  showName: mergedShow,
+                  thumbnailUrl: metadata?.thumbnailUrl,
+                  showNameUncertain: !pageMeta.showName
+                };
+              }
             }
           }
 
@@ -7988,9 +8209,15 @@
 
           // Step 2: Search for RSS feed. Pass null showName when uncertain so
           // searchForRSSFeed leans entirely on the episode-title strategy
-          // rather than poisoning Strategy 2 with the episode title.
-          const showForSearch = metadata.showNameUncertain ? null : metadata.showName;
-          const rssInfo = await searchForRSSFeed(showForSearch, metadata.title);
+          // rather than poisoning Strategy 2 with the episode title. When the
+          // fast path already ran the identical null-show search, reuse its
+          // result instead of repeating the same iTunes query.
+          if (!rssInfo) {
+            const showForSearch = metadata.showNameUncertain ? null : metadata.showName;
+            rssInfo = (showForSearch === null && quickSearchResult !== undefined)
+              ? quickSearchResult
+              : await searchForRSSFeed(showForSearch, metadata.title);
+          }
           if (!rssInfo) {
             showToast('Could not find RSS feed for this podcast - try pasting the RSS feed URL instead');
             setIsLoadingPodcast(false);
@@ -8059,7 +8286,9 @@
             audioUrl: episode.audioUrl,
             showName: rssInfo.podcastName,
             artworkUrl: rssInfo.artworkUrl,
-            link: episode.link || url
+            link: episode.link || url,
+            feedUrl: rssInfo.feedUrl,
+            collectionId: rssInfo.collectionId
           });
 
           // Save start timestamp so position restore picks it up
@@ -8120,7 +8349,8 @@
             audioUrl: episode.audioUrl,
             showName: showName,
             artworkUrl: episode.artworkUrl || '',
-            link: episode.link || feedUrl
+            link: episode.link || feedUrl,
+            feedUrl: feedUrl
           });
 
           setUrl(''); // Clear URL after successful load
@@ -8166,6 +8396,19 @@
       // YouTube/Spotify web work on mobile). Falls back to regular blob URL on
       // browsers without MSE support.
       const processLocalAudioFile = async (file) => {
+        // Fast path: sniff only the first 12 bytes. Non-MP4 files never used the
+        // MSE path anyway (its codec list is mp4a-only), and desktop browsers play
+        // non-dash MP4 blob URLs fine — so both can stream straight from disk via
+        // a File-backed object URL (no full read, no in-memory copy; a moved/
+        // deleted file surfaces through the existing relink banner). Dash-brand
+        // files (NotebookLM exports) and MP4 on mobile keep the buffer path below.
+        const header = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+        const isMp4 = header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70; // 'ftyp'
+        const isDashBrand = isMp4 && header[8] === 0x64 && header[9] === 0x61 && header[10] === 0x73 && header[11] === 0x68; // 'dash'
+        if (!isDashBrand && (!isMp4 || !isMobileDevice)) {
+          return URL.createObjectURL(file);
+        }
+
         const buffer = await file.arrayBuffer();
         const bytes = new Uint8Array(buffer);
 
@@ -8514,7 +8757,7 @@
             let text = null;
             for (const proxy of corsProxies) {
               try {
-                const response = await fetch(proxy(url));
+                const response = await fetchWithTimeout(proxy(url), 5000);
                 if (response.ok) { text = await response.text(); break; }
               } catch (e) { continue; }
             }
