@@ -4,6 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HarkenJot - Take Notes While You Listen</title>
+
+  <!--
+    App icon: an Erica One "H" over a "J" on the accent red. The glyph outlines
+    are traced to raw SVG paths, so the icon never depends on a webfont being
+    loaded. The tab favicon is inlined as a data URI to keep it inside the
+    single-file app; iOS and Android require real files, so those sit alongside.
+    All of them are generated from one geometry — see the note in CLAUDE.md.
+  -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20512%20512'%3E%3Crect%20width='512'%20height='512'%20fill='%23c45a3b'/%3E%3Cg%20transform='translate(83.0499%20334.8171)%20scale(0.33277224)'%3E%3Cpath%20d='M807.4499999999999%20217.29999999999998Q742.4499999999999%20217.29999999999998%20688.9499999999999%20208.29999999999998Q635.4499999999999%20199.29999999999998%20614.4499999999999%20190.29999999999998L593.4499999999999%20181.29999999999998V-68.70000000000002Q633.4499999999999%20-52.70000000000002%20694.4499999999999%20-51.70000000000002V-483.70000000000005H1039.4499999999998V18.299999999999983Q1039.4499999999998%20119.29999999999998%20982.9499999999998%20168.29999999999998Q926.4499999999999%20217.29999999999998%20807.4499999999999%20217.29999999999998Z'%20fill='%232d2a26'/%3E%3Cpath%20d='M386%20-379.0V-691.0H715V0.0H386V-233.0H328V0.0H0V-691.0H328V-379.0Z'%20fill='%23faf6ef'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="site.webmanifest">
+  <meta name="theme-color" content="#c45a3b">
+  <meta name="apple-mobile-web-app-title" content="HarkenJot">
+
   <!--
     Dependency bootstrap. Libraries are PINNED to specific versions and loaded with
     multi-CDN fallback (unpkg -> jsDelivr -> cdnjs) so a single CDN outage, or a bad
@@ -3555,7 +3569,7 @@
             <div className="logo">
               <div className="logo-icon">H</div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.43.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.44.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>

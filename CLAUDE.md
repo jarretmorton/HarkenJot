@@ -13,12 +13,48 @@ Everything — HTML, CSS, and JavaScript (React/JSX) — is in one file: `Harken
 ### File Structure
 
 ```
-HarkenJot.html   # The entire application
-README.md        # Project documentation
-CLAUDE.md        # This file
-NotebookLM.png   # NotebookLM logo asset (not referenced by the app or README)
-.nojekyll        # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
+HarkenJot.html          # The entire application
+README.md               # Project documentation
+CLAUDE.md               # This file
+NotebookLM.png          # NotebookLM logo asset (not referenced by the app or README)
+.nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
+site.webmanifest        # PWA manifest (name, theme colour, icon set)
+apple-touch-icon.png    # 180×180 iOS home-screen icon
+icon-192.png            # Android / PWA icon
+icon-512.png            # Android / PWA icon
+icon-maskable-512.png   # Android maskable icon (extra padding for the crop)
 ```
+
+### App Icon
+
+The mark is an Erica One "H" in cream over an ink "J" on the accent red. Glyph
+outlines are **traced to raw SVG paths**, so the icon never depends on a webfont
+being available at runtime.
+
+Two rules for regenerating it:
+
+- **One geometry.** Layout is computed in font units and scaled once, so the
+  favicon and every PNG derive from the same numbers and cannot drift.
+- **Rasterise the PNGs *from* the SVG.** Do not redraw the mark with Pillow —
+  its text renderer only takes integer point sizes, so the cap height lands a
+  fraction off and the raster silently diverges from the vector.
+
+The mark is centred on its **ink bounding box** (not the cap line, which leaves
+the J's descender hanging and clipping), then scaled so the furthest ink sits at
+90% of the half-width — 80% for the maskable variant. That is what lets one mark
+survive both the iOS squircle and the Android circle.
+
+The tab favicon is an inline `data:` URI in `<head>` so it travels with the
+single-file app. When editing it by hand, note that the SVG's own `"` and `>`
+must stay percent-encoded or they terminate the HTML attribute early and the
+icon silently fails to load.
+
+Known and accepted: at 16px the mark reads as a coloured shape rather than two
+letters. That trade was made deliberately in favour of the heavier silhouette.
+
+The header `.logo-icon` in the app UI is a plain text "H" and does not match the
+app icon; it sits beside the "HarkenJot" wordmark, where a single letter reads
+fine.
 
 ### Key Sections in HarkenJot.html
 
