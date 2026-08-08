@@ -52,9 +52,11 @@ icon silently fails to load.
 Known and accepted: at 16px the mark reads as a coloured shape rather than two
 letters. That trade was made deliberately in favour of the heavier silhouette.
 
-The header `.logo-icon` in the app UI is a plain text "H" and does not match the
-app icon; it sits beside the "HarkenJot" wordmark, where a single letter reads
-fine.
+The in-app header mark is `Icons.Logo`, which carries the **same traced paths
+and the same group transform** as the generated assets — regenerate it from the
+same script rather than editing it by hand, or the header and the home-screen
+icon will drift. It deliberately omits the background `<rect>`: the red ground
+comes from the `.logo-icon` CSS background so it keeps following `--accent`.
 
 ### Key Sections in HarkenJot.html
 
