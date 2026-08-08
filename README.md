@@ -17,13 +17,13 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
 - **Single-File Deployment** — The entire application is one HTML file
 
-<img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 25%;"/>
 <br><br>
-<img width="1079" height="1799" alt="Screenshot_20260606_084243_Edge" src="https://github.com/user-attachments/assets/cd1512bb-76ca-4e36-8a6a-397a3b26bdf3" style="width: 50%;"/>
+<img width="1079" height="1799" alt="Screenshot_20260606_084243_Edge" src="https://github.com/user-attachments/assets/cd1512bb-76ca-4e36-8a6a-397a3b26bdf3" style="width: 25%;"/>
 <br><br>
-<img width="1080" height="1800" alt="Screenshot_20260606_084259_Edge" src="https://github.com/user-attachments/assets/f6a8ffb1-edc5-4506-883e-c83caa3229ed" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_084259_Edge" src="https://github.com/user-attachments/assets/f6a8ffb1-edc5-4506-883e-c83caa3229ed" style="width: 25%;"/>
 <br><br>
-<img width="1080" height="1800" alt="Screenshot_20260606_085538_Edge" src="https://github.com/user-attachments/assets/5a16bc6c-78c0-4816-a948-164c50077aac" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_085538_Edge" src="https://github.com/user-attachments/assets/5a16bc6c-78c0-4816-a948-164c50077aac" style="width: 25%;"/>
 
 ## Getting Started
 
