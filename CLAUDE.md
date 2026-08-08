@@ -13,21 +13,57 @@ Everything — HTML, CSS, and JavaScript (React/JSX) — is in one file: `Harken
 ### File Structure
 
 ```
-HarkenJot.html        # The entire application
-README.md             # Project documentation
-CLAUDE.md             # This file
-apple-touch-icon.png  # 180x180 home-screen icon for iOS (referenced from <head>)
-NotebookLM.png        # NotebookLM logo asset (not referenced by the app or README)
-.nojekyll             # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
+HarkenJot.html          # The entire application
+README.md               # Project documentation
+CLAUDE.md               # This file
+NotebookLM.png          # NotebookLM logo asset (not referenced by the app or README)
+.nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
+site.webmanifest        # PWA manifest (name, theme colour, icon set)
+apple-touch-icon.png    # 180×180 iOS home-screen icon
+icon-192.png            # Android / PWA icon
+icon-512.png            # Android / PWA icon
+icon-maskable-512.png   # Android maskable icon (extra padding for the crop)
 ```
 
-`apple-touch-icon.png` is the only asset the app itself references, and the one
-exception to strict single-file deployment. Nothing breaks without it — iOS just
-falls back to a screenshot thumbnail — but it should be deployed alongside
-`HarkenJot.html`. The browser-tab favicon is an inline SVG data URI in `<head>`,
-so the HTML file still has an icon on its own. If regenerating the PNG, keep it
-**full bleed with square corners**: iOS applies its own superellipse mask, so
-pre-rounded corners get double-rounded and transparent corners render black.
+### App Icon
+
+The mark is an Erica One "H" in cream over an ink "J" on the accent red. Glyph
+outlines are **traced to raw SVG paths**, so the icon never depends on a webfont
+being available at runtime.
+
+Two rules for regenerating it:
+
+- **One geometry.** Layout is computed in font units and scaled once, so the
+  favicon and every PNG derive from the same numbers and cannot drift.
+- **Rasterise the PNGs *from* the SVG.** Do not redraw the mark with Pillow —
+  its text renderer only takes integer point sizes, so the cap height lands a
+  fraction off and the raster silently diverges from the vector.
+
+The mark is centred on its **ink bounding box** (not the cap line, which leaves
+the J's descender hanging and clipping), then scaled so the furthest ink sits at
+90% of the half-width — 80% for the maskable variant. That is what lets one mark
+survive both the iOS squircle and the Android circle.
+
+The tab favicon is an inline `data:` URI in `<head>` so it travels with the
+single-file app. When editing it by hand, note that the SVG's own `"` and `>`
+must stay percent-encoded or they terminate the HTML attribute early and the
+icon silently fails to load.
+
+Known and accepted: at 16px the mark reads as a coloured shape rather than two
+letters. That trade was made deliberately in favour of the heavier silhouette.
+
+The in-app header mark is `Icons.Logo`, which carries the **same traced paths
+and the same group transform** as the generated assets — regenerate it from the
+same script rather than editing it by hand, or the header and the home-screen
+icon will drift. It deliberately omits the background `<rect>`: the red ground
+comes from the `.logo-icon` CSS background so it keeps following `--accent`.
+
+The PNGs are the one exception to strict single-file deployment, and should be
+deployed alongside `HarkenJot.html`. Nothing breaks without them — iOS falls
+back to a screenshot thumbnail, and the inline favicon means the HTML file still
+has an icon on its own. Keep them **full bleed with square corners**: iOS
+applies its own superellipse mask, so pre-rounded corners get double-rounded and
+transparent corners render black.
 
 ### Key Sections in HarkenJot.html
 

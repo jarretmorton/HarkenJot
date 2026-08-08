@@ -15,7 +15,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Library Management** — Browse, search, export, and import your notes and sources
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
-- **Single-File Deployment** — The entire application is one HTML file (plus one optional icon)
+- **Single-File Deployment** — The entire application is one HTML file (plus optional home-screen icons)
 - **Add to Home Screen** — Installs to your phone's home screen with a proper app icon
 
 <img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 25%;"/>
