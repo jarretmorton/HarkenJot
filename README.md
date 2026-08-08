@@ -15,15 +15,16 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Library Management** — Browse, search, export, and import your notes and sources
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
-- **Single-File Deployment** — The entire application is one HTML file
+- **Single-File Deployment** — The entire application is one HTML file (plus optional home-screen icons)
+- **Add to Home Screen** — Installs to your phone's home screen with a proper app icon
 
-<img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 25%;"/>
 <br><br>
-<img width="1079" height="1799" alt="Screenshot_20260606_084243_Edge" src="https://github.com/user-attachments/assets/cd1512bb-76ca-4e36-8a6a-397a3b26bdf3" style="width: 50%;"/>
+<img width="1079" height="1799" alt="Screenshot_20260606_084243_Edge" src="https://github.com/user-attachments/assets/cd1512bb-76ca-4e36-8a6a-397a3b26bdf3" style="width: 25%;"/>
 <br><br>
-<img width="1080" height="1800" alt="Screenshot_20260606_084259_Edge" src="https://github.com/user-attachments/assets/f6a8ffb1-edc5-4506-883e-c83caa3229ed" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_084259_Edge" src="https://github.com/user-attachments/assets/f6a8ffb1-edc5-4506-883e-c83caa3229ed" style="width: 25%;"/>
 <br><br>
-<img width="1080" height="1800" alt="Screenshot_20260606_085538_Edge" src="https://github.com/user-attachments/assets/5a16bc6c-78c0-4816-a948-164c50077aac" style="width: 50%;"/>
+<img width="1080" height="1800" alt="Screenshot_20260606_085538_Edge" src="https://github.com/user-attachments/assets/5a16bc6c-78c0-4816-a948-164c50077aac" style="width: 25%;"/>
 
 ## Getting Started
 
@@ -76,7 +77,20 @@ Upload `HarkenJot.html` to any static file host:
 - **S3 + CloudFront** — Upload to a bucket with static hosting enabled
 - **Any web server** — Copy the file to your server's document root
 
+Copy `apple-touch-icon.png` alongside it to get the home-screen icon on iOS. It's
+optional — without it the app works identically and iOS falls back to a
+screenshot thumbnail — and the browser-tab icon is embedded in the HTML either
+way.
+
 HTTPS is recommended for full browser API support (microphone access, Media Session API).
+
+### Adding to your home screen
+
+- **iOS (Safari)** — Share → Add to Home Screen
+- **Android (Chrome/Edge)** — ⋮ → Add to Home screen
+
+The app opens in a normal browser tab. Launching without browser chrome would
+need a web app manifest, which isn't included yet.
 
 ## Data & Privacy
 

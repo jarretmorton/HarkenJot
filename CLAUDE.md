@@ -58,6 +58,13 @@ same script rather than editing it by hand, or the header and the home-screen
 icon will drift. It deliberately omits the background `<rect>`: the red ground
 comes from the `.logo-icon` CSS background so it keeps following `--accent`.
 
+The PNGs are the one exception to strict single-file deployment, and should be
+deployed alongside `HarkenJot.html`. Nothing breaks without them — iOS falls
+back to a screenshot thumbnail, and the inline favicon means the HTML file still
+has an icon on its own. Keep them **full bleed with square corners**: iOS
+applies its own superellipse mask, so pre-rounded corners get double-rounded and
+transparent corners render black.
+
 ### Key Sections in HarkenJot.html
 
 Line numbers are approximate — they drift as the file grows. Search for the named symbol if a range is stale.
@@ -324,8 +331,8 @@ The current version is shown in the app header. Update it in the `App` component
 - **PR titles MUST ALWAYS include the new version number** as a prefix (e.g., "v1.8.7 — Fix podcast loading"). Never omit the version — every PR title starts with `vX.Y.Z — `
 - PRs are merged via GitHub merge commits
 - **CRITICAL: After EVERY `git push`, you MUST provide the GitHub PR URL.** This is non-negotiable. Always include the link in your response immediately after pushing:
-  - PR creation link: `https://github.com/jarretmorton/Research-App/pull/new/<branch-name>`
-  - If a PR already exists: `https://github.com/jarretmorton/Research-App/pull/<pr-number>`
+  - PR creation link: `https://github.com/jarretmorton/HarkenJot/pull/new/<branch-name>`
+  - If a PR already exists: `https://github.com/jarretmorton/HarkenJot/pull/<pr-number>`
 - **MANDATORY post-push sequence — do these in order, every time, no exceptions:**
   1. **Check the state of any existing PR for the branch FIRST**, before doing anything else with PRs. Use `pull_request_read` (or `gh pr view`) to read the `state` and `merged` fields. Do NOT skip this step even if you opened the PR earlier in the same session — it may have been merged between your last action and now.
   2. **If the most recent PR for the branch is `closed` or `merged`:** open a NEW PR for the unmerged commits with `create_pull_request` (or `gh pr create`). Do NOT update or link the closed PR — its link is not executable.
