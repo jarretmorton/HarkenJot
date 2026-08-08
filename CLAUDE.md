@@ -19,10 +19,9 @@ CLAUDE.md               # This file
 NotebookLM.png          # NotebookLM logo asset (not referenced by the app or README)
 .nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 site.webmanifest        # PWA manifest (name, theme colour, icon set)
-apple-touch-icon.png    # 180×180 iOS home-screen icon
-icon-192.png            # Android / PWA icon
-icon-512.png            # Android / PWA icon
-icon-maskable-512.png   # Android maskable icon (extra padding for the crop)
+apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
+icon-android-192.png    # Android / PWA icon (padded + badge-aware)
+icon-android-512.png    # Android / PWA icon (padded + badge-aware)
 ```
 
 ### App Icon
@@ -41,8 +40,26 @@ Two rules for regenerating it:
 
 The mark is centred on its **ink bounding box** (not the cap line, which leaves
 the J's descender hanging and clipping), then scaled so the furthest ink sits at
-90% of the half-width — 80% for the maskable variant. That is what lets one mark
-survive both the iOS squircle and the Android circle.
+90% of the half-width. That is what lets it survive the iOS squircle.
+
+**Android needs its own render — do not point the manifest at the iOS one.**
+Android masks the icon, so the full-bleed mark had its letters cut at the
+squircle edge on a real device. `icon-android-*.png` is the same mark, still
+centred, scaled down until the ink radius about the tile centre is **0.355** of
+tile width — a margin of 0.145 to the edge, against 0.097 before. Android's
+documented maskable safe circle is radius 0.40, so this clears it.
+
+Both manifest entries are declared `"purpose": "any maskable"` deliberately.
+Edge on Android picked the plain `any` icon over the maskable one, so shipping a
+safe `any` icon is the only reliable fix — a correct maskable icon alongside a
+full-bleed `any` icon does not help.
+
+Known and accepted: a launcher-added web app gets the **browser's badge**
+stamped over the bottom-right, roughly centred at `(0.80, 0.81)` with radius
+`0.175` in tile fractions, which clips the J's tail. Avoiding it entirely means
+shifting the mark up and off-centre; that was built, reviewed, and rejected in
+favour of keeping the mark centred. Do not "fix" it by re-introducing the
+shift.
 
 The tab favicon is an inline `data:` URI in `<head>` so it travels with the
 single-file app. When editing it by hand, note that the SVG's own `"` and `>`
