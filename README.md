@@ -15,7 +15,8 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Library Management** — Browse, search, export, and import your notes and sources
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
-- **Single-File Deployment** — The entire application is one HTML file
+- **Single-File Deployment** — The entire application is one HTML file (plus one optional icon)
+- **Add to Home Screen** — Installs to your phone's home screen with a proper app icon
 
 <img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 25%;"/>
 <br><br>
@@ -76,7 +77,20 @@ Upload `HarkenJot.html` to any static file host:
 - **S3 + CloudFront** — Upload to a bucket with static hosting enabled
 - **Any web server** — Copy the file to your server's document root
 
+Copy `apple-touch-icon.png` alongside it to get the home-screen icon on iOS. It's
+optional — without it the app works identically and iOS falls back to a
+screenshot thumbnail — and the browser-tab icon is embedded in the HTML either
+way.
+
 HTTPS is recommended for full browser API support (microphone access, Media Session API).
+
+### Adding to your home screen
+
+- **iOS (Safari)** — Share → Add to Home Screen
+- **Android (Chrome/Edge)** — ⋮ → Add to Home screen
+
+The app opens in a normal browser tab. Launching without browser chrome would
+need a web app manifest, which isn't included yet.
 
 ## Data & Privacy
 

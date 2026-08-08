@@ -13,12 +13,21 @@ Everything — HTML, CSS, and JavaScript (React/JSX) — is in one file: `Harken
 ### File Structure
 
 ```
-HarkenJot.html   # The entire application
-README.md        # Project documentation
-CLAUDE.md        # This file
-NotebookLM.png   # NotebookLM logo asset (not referenced by the app or README)
-.nojekyll        # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
+HarkenJot.html        # The entire application
+README.md             # Project documentation
+CLAUDE.md             # This file
+apple-touch-icon.png  # 180x180 home-screen icon for iOS (referenced from <head>)
+NotebookLM.png        # NotebookLM logo asset (not referenced by the app or README)
+.nojekyll             # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 ```
+
+`apple-touch-icon.png` is the only asset the app itself references, and the one
+exception to strict single-file deployment. Nothing breaks without it — iOS just
+falls back to a screenshot thumbnail — but it should be deployed alongside
+`HarkenJot.html`. The browser-tab favicon is an inline SVG data URI in `<head>`,
+so the HTML file still has an icon on its own. If regenerating the PNG, keep it
+**full bleed with square corners**: iOS applies its own superellipse mask, so
+pre-rounded corners get double-rounded and transparent corners render black.
 
 ### Key Sections in HarkenJot.html
 
