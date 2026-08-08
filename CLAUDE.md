@@ -19,10 +19,9 @@ CLAUDE.md               # This file
 NotebookLM.png          # NotebookLM logo asset (not referenced by the app or README)
 .nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 site.webmanifest        # PWA manifest (name, theme colour, icon set)
-apple-touch-icon.png    # 180×180 iOS home-screen icon
-icon-192.png            # Android / PWA icon
-icon-512.png            # Android / PWA icon
-icon-maskable-512.png   # Android maskable icon (extra padding for the crop)
+apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
+icon-android-192.png    # Android / PWA icon (padded + badge-aware)
+icon-android-512.png    # Android / PWA icon (padded + badge-aware)
 ```
 
 ### App Icon
@@ -41,8 +40,27 @@ Two rules for regenerating it:
 
 The mark is centred on its **ink bounding box** (not the cap line, which leaves
 the J's descender hanging and clipping), then scaled so the furthest ink sits at
-90% of the half-width — 80% for the maskable variant. That is what lets one mark
-survive both the iOS squircle and the Android circle.
+90% of the half-width. That is what lets it survive the iOS squircle.
+
+**Android needs its own render — do not point the manifest at the iOS one.**
+Two things go wrong otherwise, and both were observed on a real device:
+
+- Android masks the icon, so a 90%-of-half-width mark has its letters cut at the
+  squircle edge.
+- A launcher-added web app gets the **browser's badge** stamped over the
+  bottom-right — exactly where the J sits — obliterating it.
+
+`icon-android-*.png` is solved against both constraints rather than eyeballed:
+ink radius about the tile centre **≤ 0.345** of tile width (mask margin) and a
+**≥ 0.04** gap between ink and the badge disc, which sits at roughly
+`(0.80, 0.81)` with radius `0.175`. The result stays horizontally centred and
+shifts **up** (ink centre `y ≈ 0.442`); it is the largest mark that satisfies
+both. Re-solve rather than nudge if the composition ever changes.
+
+Both manifest entries are declared `"purpose": "any maskable"` deliberately.
+Edge on Android picked the plain `any` icon over the maskable one, so shipping a
+safe `any` icon is the only reliable fix — a correct maskable icon alongside a
+full-bleed `any` icon does not help.
 
 The tab favicon is an inline `data:` URI in `<head>` so it travels with the
 single-file app. When editing it by hand, note that the SVG's own `"` and `>`
