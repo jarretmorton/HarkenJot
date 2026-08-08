@@ -43,24 +43,23 @@ the J's descender hanging and clipping), then scaled so the furthest ink sits at
 90% of the half-width. That is what lets it survive the iOS squircle.
 
 **Android needs its own render — do not point the manifest at the iOS one.**
-Two things go wrong otherwise, and both were observed on a real device:
-
-- Android masks the icon, so a 90%-of-half-width mark has its letters cut at the
-  squircle edge.
-- A launcher-added web app gets the **browser's badge** stamped over the
-  bottom-right — exactly where the J sits — obliterating it.
-
-`icon-android-*.png` is solved against both constraints rather than eyeballed:
-ink radius about the tile centre **≤ 0.345** of tile width (mask margin) and a
-**≥ 0.04** gap between ink and the badge disc, which sits at roughly
-`(0.80, 0.81)` with radius `0.175`. The result stays horizontally centred and
-shifts **up** (ink centre `y ≈ 0.442`); it is the largest mark that satisfies
-both. Re-solve rather than nudge if the composition ever changes.
+Android masks the icon, so the full-bleed mark had its letters cut at the
+squircle edge on a real device. `icon-android-*.png` is the same mark, still
+centred, scaled down until the ink radius about the tile centre is **0.355** of
+tile width — a margin of 0.145 to the edge, against 0.097 before. Android's
+documented maskable safe circle is radius 0.40, so this clears it.
 
 Both manifest entries are declared `"purpose": "any maskable"` deliberately.
 Edge on Android picked the plain `any` icon over the maskable one, so shipping a
 safe `any` icon is the only reliable fix — a correct maskable icon alongside a
 full-bleed `any` icon does not help.
+
+Known and accepted: a launcher-added web app gets the **browser's badge**
+stamped over the bottom-right, roughly centred at `(0.80, 0.81)` with radius
+`0.175` in tile fractions, which clips the J's tail. Avoiding it entirely means
+shifting the mark up and off-centre; that was built, reviewed, and rejected in
+favour of keeping the mark centred. Do not "fix" it by re-introducing the
+shift.
 
 The tab favicon is an inline `data:` URI in `<head>` so it travels with the
 single-file app. When editing it by hand, note that the SVG's own `"` and `>`
