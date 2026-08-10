@@ -1,5 +1,7 @@
 # HarkenJot
 
+<img width="180" height="180" alt="apple-touch-icon" src="https://github.com/user-attachments/assets/7f23ddb2-2f2a-444a-a59e-0eb5636ad647" style="width: 15%;"/>
+
 **Take Notes While You Listen**
 
 HarkenJot is a self-contained note-taking web application for capturing notes while consuming audio, video, and text content. It supports voice recording with dual speech recognition (Web Speech API + Whisper AI), and works entirely in the browser with no backend or installation required.
