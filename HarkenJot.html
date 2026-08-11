@@ -3570,7 +3570,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.44.3</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.44.4</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5862,12 +5862,17 @@
         prevSpeedRef.current = speed;
       }, [speed, isPlaying, currentSentenceIndex]);
 
-      // Save speed to source when it changes
-      useEffect(() => {
-        if (currentSource?.id && speed !== 1) {
-          updateSource(currentSource.id, { speed: speed });
+      // Speed changed by the user — persist it on the source, including a change
+      // back to 1x. An effect keyed on `speed` can't: ReaderView remounts per
+      // source, so it starts at 1 and would overwrite the saved speed before
+      // hydration.
+      const changeSpeed = (rate) => {
+        if (!isFinite(rate) || rate <= 0) return;
+        setSpeed(rate);
+        if (currentSource?.id) {
+          updateSource(currentSource.id, { speed: rate });
         }
-      }, [speed, currentSource?.id]);
+      };
 
       // Media Session API for Android Auto / lock screen controls (TTS)
       useEffect(() => {
@@ -6677,7 +6682,7 @@
                     <div className={`speed-voice-row ${carMode ? 'car-mode' : ''}`}>
                       <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                         <label>Speed</label>
-                        <select value={speed} onChange={(e) => setSpeed(parseFloat(e.target.value))}>
+                        <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
                           <option value="0.75">0.75x</option>
                           <option value="1">1x</option>
                           <option value="1.25">1.25x</option>
@@ -6802,6 +6807,10 @@
       }, []);
 
       const playerRef = useRef(null);
+      // Mirrors `speed` for callbacks that outlive the render they were created in.
+      // The YouTube player is built asynchronously (iframe API readiness + a
+      // setTimeout), so its onReady closure would otherwise see a stale speed.
+      const speedRef = useRef(1);
       const audioPlayerRef = useRef(null); // HTML5 audio element for podcasts
       const videoPlayerRef = useRef(null); // HTML5 video element for X.com tweet videos
       const activeBlobUrlsRef = useRef(new Set()); // Blob URLs created this session (valid for re-link detection)
@@ -6847,6 +6856,7 @@
           setPodcastAudio(null);
           setXVideo(null);
           setSpeed(currentSource.speed || 1);
+          speedRef.current = currentSource.speed || 1;
           // Don't set URL - keep input clear after loading
           // Initialize player after state update
           setTimeout(() => {
@@ -6919,6 +6929,7 @@
             link: currentSource.link || currentSource.url
           });
           setSpeed(currentSource.speed || 1);
+          speedRef.current = currentSource.speed || 1;
           // Don't set URL - keep input clear after loading
           // Restore saved position after audio loads
           setTimeout(() => {
@@ -6991,6 +7002,7 @@
 
       // Apply playback speed to YouTube and audio players
       useEffect(() => {
+        speedRef.current = speed;
         if (playerRef.current && playerRef.current.setPlaybackRate) {
           playerRef.current.setPlaybackRate(speed);
         }
@@ -7002,12 +7014,18 @@
         }
       }, [speed]);
 
-      // Save speed to source when it changes
-      useEffect(() => {
-        if (currentSource?.id && speed !== 1) {
-          updateSource(currentSource.id, { speed: speed });
+      // Speed changed by the user — from our dropdown or YouTube's own speed menu.
+      // Persist it (including a change back to 1x, which an effect keyed on `speed`
+      // couldn't do: MediaView remounts per source, so it starts at 1 every time
+      // and would overwrite the saved speed before hydration).
+      const changeSpeed = (rate) => {
+        if (!isFinite(rate) || rate <= 0) return;
+        speedRef.current = rate;
+        setSpeed(rate);
+        if (currentSource?.id) {
+          updateSource(currentSource.id, { speed: rate });
         }
-      }, [speed, currentSource?.id]);
+      };
 
       // Save position whenever it changes (for YouTube, podcast, and X.com timer)
       useEffect(() => {
@@ -8907,12 +8925,29 @@
               if (startSeconds > 0) {
                 setCurrentTime(startSeconds);
               }
+              // The player doesn't exist when the source's saved speed is loaded
+              // into state, so the speed effect can't reach it — apply it here.
+              if (speedRef.current !== 1) {
+                event.target.setPlaybackRate(speedRef.current);
+              }
+            },
+            onPlaybackRateChange: (event) => {
+              // Fires for YouTube's own speed menu as well as our setPlaybackRate
+              // calls; only the former is a change worth persisting.
+              const rate = event.data;
+              if (isFinite(rate) && rate > 0 && rate !== speedRef.current) {
+                changeSpeed(rate);
+              }
             },
             onStateChange: (event) => {
               setIsPlaying(event.data === window.YT.PlayerState.PLAYING);
 
               if (event.data === window.YT.PlayerState.PLAYING) {
                 requestWakeLock(); // Keep screen on while playing
+                // YouTube resets the rate to 1x on some loads — re-assert ours.
+                if (speedRef.current !== 1 && event.target.getPlaybackRate() !== speedRef.current) {
+                  event.target.setPlaybackRate(speedRef.current);
+                }
                 // Auto-mark in-progress when playback actually starts (not on open)
                 if (currentSource?.id && getReadStatus(currentSource) !== 'inProgress') {
                   updateSource(currentSource.id, { status: 'inProgress', isRead: false });
@@ -9700,7 +9735,7 @@
 
                     <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                       <label>Speed</label>
-                      <select value={speed} onChange={(e) => setSpeed(parseFloat(e.target.value))}>
+                      <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
                         <option value="0.75">0.75x</option>
                         <option value="1">1x</option>
                         <option value="1.25">1.25x</option>
@@ -10001,7 +10036,7 @@
 
                     <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                       <label>Speed</label>
-                      <select value={speed} onChange={(e) => setSpeed(parseFloat(e.target.value))}>
+                      <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
                         <option value="0.75">0.75x</option>
                         <option value="1">1x</option>
                         <option value="1.25">1.25x</option>
