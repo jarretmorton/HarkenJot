@@ -2619,15 +2619,28 @@
       window.speechSynthesis.speak(u);
     });
 
-    // Score how well an audio filename matches a source title for NotebookLM linking suggestions.
+    // Gemini Notebook (formerly NotebookLM). Google moved the product to
+    // notebook.google.com in July 2026; the legacy notebooklm.google.com and
+    // notebooklm.google hosts still redirect there, so keep accepting all three —
+    // notebook URLs saved before the rebrand must continue to validate and open.
+    const NOTEBOOK_HOME_URL = 'https://notebook.google.com/';
+    const NOTEBOOK_URL_RE = /^https:\/\/(?:notebook\.google\.com|notebooklm\.google(?:\.com)?)\/notebook\/[\w-]+/i;
+
+    // A local-audio source is a notebook export if it was tagged as one, or if the title
+    // still carries the brand. 'gemini notebook' is required in full — a bare 'notebook'
+    // would match far too much.
+    const isNotebookSource = (source) => !!source && (source.isNotebookLM ||
+      /notebooklm|notebook\s*lm|gemini\s*notebook/i.test(source.title || ''));
+
+    // Score how well an audio filename matches a source title for notebook linking suggestions.
     // Returns { score: 0–1, reason: string|null }
     const scoreSourceMatch = (fileName, sourceTitle) => {
       if (!fileName || !sourceTitle) return { score: 0, reason: null };
       const STOP_WORDS = new Set(['a','an','the','of','in','on','at','to','for','and','or','but','with','by','from','as','is','are','was','were','be','been','it','its','this','that','these','those','i','my','we','our','you','your','about','into','out','up','do','so','no','not','if','can','has','had','have','will','just','also','than']);
-      const NOISE_RE = /\b(podcast|notebooklm|notebook\s*lm|audio|deep\s*dive|overview|summary|episode|part\s*\d+)\b/gi;
+      const NOISE_RE = /\b(podcast|notebooklm|notebook\s*lm|gemini\s*notebook|audio|deep\s*dive|overview|summary|episode|part\s*\d+)\b/gi;
       const tokenize = (str) => str
         .replace(/\.[^.]+$/, '')          // strip file extension
-        .replace(NOISE_RE, ' ')           // remove NotebookLM boilerplate
+        .replace(NOISE_RE, ' ')           // remove notebook-export boilerplate
         .replace(/([a-z])([A-Z])/g, '$1 $2') // split camelCase
         .toLowerCase()
         .split(/[\s\-_.,!?()\[\]]+/)
@@ -3570,7 +3583,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.44.4</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.45.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -3820,8 +3833,6 @@
       const [urlInput, setUrlInput] = useState('');
       const [urlError, setUrlError] = useState('');
 
-      const NOTEBOOK_URL_RE = /^https:\/\/notebooklm\.google\.com\/notebook\/[\w-]+/i;
-
       useEffect(() => {
         if (show) {
           setStep(defaultStep);
@@ -3860,7 +3871,7 @@
           return;
         }
         if (!NOTEBOOK_URL_RE.test(trimmed)) {
-          setUrlError('Must be a https://notebooklm.google.com/notebook/… URL');
+          setUrlError('Must be a https://notebook.google.com/notebook/… URL');
           return;
         }
         setUrlError('');
@@ -3874,13 +3885,13 @@
             {step === 'ask' ? (
               <>
                 <div className="modal-header">
-                  <span className="modal-title">NotebookLM Podcast?</span>
+                  <span className="modal-title">Gemini Notebook Podcast?</span>
                   <button type="button" className="modal-close" onClick={onClose}>&times;</button>
                 </div>
                 <div className="modal-body" style={{ textAlign: 'center', padding: '2rem 1.5rem' }}>
                   <div style={{ marginBottom: '1.25rem' }}><Icons.NotebookLM size={64} /></div>
                   <p style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '0.4rem', wordBreak: 'break-word' }}>{podcastName}</p>
-                  <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>Is this a NotebookLM podcast?</p>
+                  <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.9rem' }}>Is this a Gemini Notebook podcast?</p>
                   <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
                     <button type="button" className="btn btn-secondary" onClick={onClose} style={{ padding: '0.9rem 2rem', fontSize: '1rem' }}>No</button>
                     <button type="button" className="btn btn-primary" onClick={() => { onConfirmNotebookLM(); setStep('url'); }} style={{ padding: '0.9rem 2rem', fontSize: '1rem' }}>Yes</button>
@@ -3891,19 +3902,19 @@
               <>
                 <div className="modal-header">
                   <div>
-                    <div className="modal-title">NotebookLM source URL</div>
+                    <div className="modal-title">Gemini Notebook source URL</div>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem', wordBreak: 'break-word' }}>{podcastName}</div>
                   </div>
                   <button type="button" className="modal-close" onClick={onClose}>&times;</button>
                 </div>
                 <div className="modal-body" style={{ padding: '1.5rem' }}>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: 0, marginBottom: '0.75rem' }}>Paste the notebook URL to link this audio back to its NotebookLM source (optional).</p>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: 0, marginBottom: '0.75rem' }}>Paste the notebook URL to link this audio back to its Gemini Notebook source (optional).</p>
                   <input
                     type="url"
                     value={urlInput}
                     onChange={(e) => { setUrlInput(e.target.value); if (urlError) setUrlError(''); }}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleSaveUrl(); }}
-                    placeholder="https://notebooklm.google.com/notebook/…"
+                    placeholder="https://notebook.google.com/notebook/…"
                     autoFocus
                     style={{ width: '100%', padding: '0.6rem 0.75rem', border: `1px solid ${urlError ? 'var(--danger, #c00)' : 'var(--border)'}`, borderRadius: '6px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box' }}
                   />
@@ -6547,9 +6558,9 @@
                     <span>{content.sentences?.length ?? 0} sentences</span>
                     {!sources?.find(s => s.linkedSourceId === currentSource?.id) && (
                       content.url && !content.url.startsWith('blob:') ? (
-                        <button type="button" title="Open in NotebookLM (copies URL)" onClick={() => { navigator.clipboard.writeText(content.url).catch(() => {}); window.open('https://notebooklm.google.com/', '_blank', 'noopener noreferrer'); showToast('URL copied — paste into NotebookLM to add as a source'); }}><Icons.NotebookLM /></button>
+                        <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(content.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>
                       ) : (
-                        <button type="button" title="Open NotebookLM" onClick={() => { window.open('https://notebooklm.google.com/', '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
+                        <button type="button" title="Open Gemini Notebook" onClick={() => { window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
                       )
                     )}
                   </div>
@@ -8506,7 +8517,7 @@
       const handleSaveNotebookLMUrl = (notebookLMUrl) => {
         if (currentSource && notebookLMUrl) {
           updateSource(currentSource.id, { notebookLMUrl });
-          showToast('NotebookLM link saved');
+          showToast('Gemini Notebook link saved');
         }
       };
 
@@ -9670,7 +9681,7 @@
                       <span className="library-item-type youtube">YouTube</span>
                       {currentSource.channelName && (currentSource.url ? <a href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{currentSource.channelName}</a> : <span>{currentSource.channelName}</span>)}
                       {duration > 0 && <span>{formatTime(duration)}</span>}
-                      {currentSource.url && <button type="button" title="Open in NotebookLM (copies URL)" onClick={() => { navigator.clipboard.writeText(currentSource.url).catch(() => {}); window.open('https://notebooklm.google.com/', '_blank', 'noopener noreferrer'); showToast('URL copied — paste into NotebookLM to add as a source'); }}><Icons.NotebookLM /></button>}
+                      {currentSource.url && <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(currentSource.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>}
                     </div>
                   </div>
                 </div>
@@ -9813,15 +9824,20 @@
                   </div>
                   <div className="source-meta">
                     <span className="library-item-type podcast">Podcast</span>
-                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : (currentSource?.isNotebookLM || (currentSource?.title || '').toLowerCase().includes('notebooklm')) ? <a href={currentSource?.notebookLMUrl || 'https://notebooklm.google.com/'} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>NotebookLM</a> : null}
+                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : isNotebookSource(currentSource) ? <a href={currentSource?.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a> : null}
                     <span>{formatTime(duration)}</span>
                     {currentSource?.notebookLMUrl ? (
-                      <button type="button" title="Open source notebook in NotebookLM" onClick={() => { window.open(currentSource.notebookLMUrl, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
+                      <>
+                        <button type="button" title="Open source notebook in Gemini Notebook" onClick={() => { window.open(currentSource.notebookLMUrl, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
+                        <button type="button" title="Edit Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.Pencil /></button>
+                      </>
                     ) : (podcastAudio.link || currentSource?.url) ? (
-                      <button type="button" title="Open in NotebookLM (copies URL)" onClick={() => { const u = podcastAudio.link || currentSource?.url; navigator.clipboard.writeText(u).catch(() => {}); window.open('https://notebooklm.google.com/', '_blank', 'noopener noreferrer'); showToast('URL copied — paste into NotebookLM to add as a source'); }}><Icons.NotebookLM /></button>
-                    ) : !(currentSource?.isNotebookLM || (currentSource?.title || '').toLowerCase().includes('notebooklm')) ? (
-                      <button type="button" title="Open NotebookLM" onClick={() => { window.open('https://notebooklm.google.com/', '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
-                    ) : null}
+                      <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { const u = podcastAudio.link || currentSource?.url; navigator.clipboard.writeText(u).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>
+                    ) : !isNotebookSource(currentSource) ? (
+                      <button type="button" title="Open Gemini Notebook" onClick={() => { window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
+                    ) : (
+                      <button type="button" title="Add Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.NotebookLM /></button>
+                    )}
                   </div>
                   {currentSource?.linkedSourceId && (() => {
                     const linkedSource = sources.find(s => s.id === currentSource.linkedSourceId);
@@ -9904,7 +9920,7 @@
               )}
 
               {!carMode && (() => {
-                const isNotebookLM = currentSource && (currentSource.isNotebookLM || (currentSource.title || '').toLowerCase().includes('notebooklm'));
+                const isNotebookLM = isNotebookSource(currentSource);
                 return (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', alignItems: 'center' }}>
                   {isNotebookLM ? (
@@ -10485,7 +10501,7 @@
                       </div>
                       <div className="library-item-meta">
                         <span className={`library-item-type ${source.type}`}>{source.type}</span>
-                        {source.type === 'podcast' && (source.showName ? ((source.link || source.url) ? <a href={source.link || source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.showName}</a> : <span className="library-item-meta-name">{source.showName}</span>) : (source.isNotebookLM || (source.title || '').toLowerCase().includes('notebooklm')) && <a href={source.notebookLMUrl || 'https://notebooklm.google.com/'} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.notebookLMUrl ? 'NotebookLM ↗' : 'NotebookLM'}</a>)}
+                        {source.type === 'podcast' && (source.showName ? ((source.link || source.url) ? <a href={source.link || source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.showName}</a> : <span className="library-item-meta-name">{source.showName}</span>) : isNotebookSource(source) && <a href={source.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.notebookLMUrl ? 'Gemini Notebook ↗' : 'Gemini Notebook'}</a>)}
                         {source.type === 'youtube' && source.channelName && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.channelName}</a> : <span className="library-item-meta-name">{source.channelName}</span>)}
                         {source.type === 'xvideo' && source.channelName && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>@{source.channelName}</a> : <span className="library-item-meta-name">@{source.channelName}</span>)}
                         {source.type !== 'podcast' && source.type !== 'youtube' && source.type !== 'xvideo' && source.url && <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(source.url)}</a>}
