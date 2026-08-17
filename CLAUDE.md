@@ -118,6 +118,31 @@ height on top. The "Gemini Notebook" text link costs 27px there. Do not "fix" th
 taking the link back out; it is the same source-attribution slot every other media
 type uses, and the real fix is the scroll container above.
 
+### Orientation lock (installed PWA)
+
+`site.webmanifest` declares `"orientation": "portrait"`, so the installed app stays upright
+however the phone is held. Two things to know before changing it:
+
+- **The lock belongs in the manifest, not in JS.** `screen.orientation.lock()` needs a
+  fullscreen browsing context on Chrome for Android and throws `NotSupportedError` in a
+  plain `standalone` PWA; MDN also flags `lock()` as not Baseline. There is deliberately no
+  orientation code in `HarkenJot.html` — no `screen.orientation`, no `orientationchange`, no
+  `@media (orientation: …)`.
+- **It overrides the user's auto-rotate, for this app only.** That is the point, but it does
+  mean the app cannot be deliberately rotated either.
+
+`"portrait"` rather than `"portrait-primary"` so `portrait-secondary` is still allowed.
+
+The lock also matches what car mode already assumes: `.playback-bar.car-mode` is a
+full-height column ending in a 2×2 grid of `min-height: 80px` buttons (70px under 500px),
+which does not fit in a phone's landscape height, and no car-mode rule is height-keyed.
+
+**Expect a delay after deploying.** Chrome does not re-read the manifest on next launch —
+`ORIENTATION_DIFFERS` triggers a WebAPK update, but the check runs on roughly a 1-day timer
+(Chrome 76+) and applies on a later launch. Removing and re-adding the home-screen app
+applies it immediately, which is the quick way to confirm the change took rather than
+concluding it did not work.
+
 ### Key Sections in HarkenJot.html
 
 Line numbers are approximate — they drift as the file grows. Search for the named symbol if a range is stale.
