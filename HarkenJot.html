@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!--
+    viewport-fit=cover is required for env(safe-area-inset-*) to resolve to anything
+    other than 0. Chrome runs an installed PWA edge-to-edge, so the layout viewport
+    extends behind the Android status and navigation bars; without the insets below,
+    the bottom of the app (the playback controls) sits underneath the nav bar. In a
+    browser tab every inset is 0, so the layout is unchanged there.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>HarkenJot - Take Notes While You Listen</title>
 
   <!--
@@ -396,6 +403,13 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      /* Keep the shell inside the system bars in an installed PWA. Safe with
+         height:100dvh because box-sizing is border-box globally; all four are 0
+         in a browser tab. */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
     }
 
     /* Header */
@@ -516,9 +530,9 @@
     .sidebar {
       position: fixed;
       right: -360px;
-      top: 60px;
+      top: calc(60px + env(safe-area-inset-top));
       height: calc(100% - 60px);
-      height: calc(100dvh - 60px);
+      height: calc(100dvh - 60px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       width: 360px;
       padding: 1rem;
       background: var(--bg-secondary);
@@ -1846,7 +1860,7 @@
     /* Toast Notification */
     .toast {
       position: fixed;
-      bottom: 2rem;
+      bottom: calc(2rem + env(safe-area-inset-bottom));
       left: 50%;
       transform: translateX(-50%) translateY(100px);
       background: var(--text-primary);
@@ -1899,6 +1913,7 @@
       opacity: 0;
       visibility: hidden;
       transition: all 0.2s ease;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
 
     .modal-overlay.show {
@@ -1912,6 +1927,7 @@
       width: 90%;
       max-width: 500px;
       max-height: 80vh;
+      max-height: 80dvh;
       overflow: auto;
       transform: scale(0.95);
       transition: all 0.2s ease;
@@ -3583,7 +3599,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.45.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.45.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -9824,7 +9840,10 @@
                   </div>
                   <div className="source-meta">
                     <span className="library-item-type podcast">Podcast</span>
-                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : isNotebookSource(currentSource) ? <a href={currentSource?.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a> : null}
+                    {/* No "Gemini Notebook" text link here: the icon buttons below open the
+                        same URL, and the duplicate label pushed this row onto a second line
+                        at large Android font scales, eating the vertical budget. */}
+                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : null}
                     <span>{formatTime(duration)}</span>
                     {currentSource?.notebookLMUrl ? (
                       <>
