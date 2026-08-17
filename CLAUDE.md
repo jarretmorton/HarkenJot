@@ -108,8 +108,15 @@ Known and accepted: at ≥140% Android font scale the media player still clips, 
 the browser too. That is a separate, older bug — this view has no scroll container
 (`overflow: hidden` from `html` down through `.reader-container`) while
 `.reader-header` and `.playback-bar` are both `flex-shrink: 0`, so content past the
-bottom edge is unreachable. Fixing it means giving the banner/artwork/spacer region
+bottom edge is unreachable. Fixing it means giving the banner + artwork region
 `overflow-y: auto` so `.playback-bar` stays pinned.
+
+Measured at 388×744 with the relink banner showing: 42px clipped at 140%, 87px at
+145%. The artwork wrapper is the only elastic child, and it has already collapsed to
+zero height by that point — so anything that makes `.source-meta` wrap adds its full
+height on top. The "Gemini Notebook" text link costs 27px there. Do not "fix" that by
+taking the link back out; it is the same source-attribution slot every other media
+type uses, and the real fix is the scroll container above.
 
 ### Key Sections in HarkenJot.html
 

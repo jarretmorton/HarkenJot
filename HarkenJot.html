@@ -3599,7 +3599,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.45.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.46.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -9840,16 +9840,10 @@
                   </div>
                   <div className="source-meta">
                     <span className="library-item-type podcast">Podcast</span>
-                    {/* No "Gemini Notebook" text link here: the icon buttons below open the
-                        same URL, and the duplicate label pushed this row onto a second line
-                        at large Android font scales, eating the vertical budget. */}
-                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : null}
+                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : isNotebookSource(currentSource) ? <a href={currentSource?.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a> : null}
                     <span>{formatTime(duration)}</span>
                     {currentSource?.notebookLMUrl ? (
-                      <>
-                        <button type="button" title="Open source notebook in Gemini Notebook" onClick={() => { window.open(currentSource.notebookLMUrl, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
-                        <button type="button" title="Edit Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.Pencil /></button>
-                      </>
+                      <button type="button" title="Edit Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.Pencil /></button>
                     ) : (podcastAudio.link || currentSource?.url) ? (
                       <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { const u = podcastAudio.link || currentSource?.url; navigator.clipboard.writeText(u).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>
                     ) : !isNotebookSource(currentSource) ? (
@@ -9940,14 +9934,21 @@
 
               {!carMode && (() => {
                 const isNotebookLM = isNotebookSource(currentSource);
+                // The wrapper below uses flex-basis 0 (not auto) so its height comes purely
+                // from flex distribution and is therefore definite — that is what lets the
+                // artwork's height:100% resolve against it.
                 return (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem', flex: '1 1 auto', minHeight: 0, overflow: 'hidden', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem', flex: '1 1 0', minHeight: 0, overflow: 'hidden', alignItems: 'center' }}>
                   {isNotebookLM ? (
                     <div
                       style={{
-                        width: '200px',
-                        maxWidth: '100%',
+                        // Square that grows to fill the gap between header and controls,
+                        // shrinks on short viewports, and stops at 360px on desktop.
+                        height: '100%',
+                        width: 'auto',
                         aspectRatio: '1',
+                        maxWidth: '100%',
+                        maxHeight: '360px',
                         borderRadius: '12px',
                         background: 'var(--bg-secondary)',
                         display: 'flex',
@@ -9957,16 +9958,18 @@
                         boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
                       }}
                     >
-                      <Icons.NotebookLM size={120} />
+                      <Icons.NotebookLM size="60%" />
                     </div>
                   ) : (!podcastAudio.artworkUrl || artworkFailed) ? (
                     <button
                       onClick={fetchCoverArt}
                       disabled={isLoadingArtwork}
                       style={{
-                        width: '200px',
-                        maxWidth: '100%',
+                        height: '100%',
+                        width: 'auto',
                         aspectRatio: '1',
+                        maxWidth: '100%',
+                        maxHeight: '360px',
                         borderRadius: '12px',
                         border: '2px dashed var(--border)',
                         background: 'var(--bg-secondary)',
@@ -9991,15 +9994,16 @@
                       alt="Podcast artwork"
                       loading="lazy"
                       onError={() => setArtworkFailed(true)}
-                      style={{ maxWidth: '200px', maxHeight: '100%', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', objectFit: 'contain' }}
+                      style={{ height: '100%', width: 'auto', maxWidth: '100%', maxHeight: '360px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', objectFit: 'contain' }}
                     />
                   )}
                 </div>
                 );
               })()}
 
-              {/* Spacer to allow flex shrinking when text note appears - hidden in car mode */}
-              <div style={{ flex: 1, minHeight: 0, display: carMode ? 'none' : 'block' }} />
+              {/* No spacer here: the artwork wrapper above is flex:1 1 0 / minHeight:0, so it
+                  both absorbs the free space and shrinks when the text note opens. A second
+                  flex:1 sibling would halve the space the artwork can fill. */}
 
               {showTextNote && (
                 <div className="text-note-container">
@@ -10520,7 +10524,7 @@
                       </div>
                       <div className="library-item-meta">
                         <span className={`library-item-type ${source.type}`}>{source.type}</span>
-                        {source.type === 'podcast' && (source.showName ? ((source.link || source.url) ? <a href={source.link || source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.showName}</a> : <span className="library-item-meta-name">{source.showName}</span>) : isNotebookSource(source) && <a href={source.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.notebookLMUrl ? 'Gemini Notebook ↗' : 'Gemini Notebook'}</a>)}
+                        {source.type === 'podcast' && (source.showName ? ((source.link || source.url) ? <a href={source.link || source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.showName}</a> : <span className="library-item-meta-name">{source.showName}</span>) : isNotebookSource(source) && <a href={source.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a>)}
                         {source.type === 'youtube' && source.channelName && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{source.channelName}</a> : <span className="library-item-meta-name">{source.channelName}</span>)}
                         {source.type === 'xvideo' && source.channelName && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>@{source.channelName}</a> : <span className="library-item-meta-name">@{source.channelName}</span>)}
                         {source.type !== 'podcast' && source.type !== 'youtube' && source.type !== 'xvideo' && source.url && <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(source.url)}</a>}
