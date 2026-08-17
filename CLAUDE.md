@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~10,300 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
+HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~10,750 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
 
 ## Architecture
 
@@ -89,25 +89,26 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | Line Range | Section |
 |------------|---------|
 | 3–115 | Head — dependency **bootstrap loader** (pinned versions, multi-CDN fallback, explicit JSX transpile, blank-screen watchdog/error UI) |
-| 116–170 | `webSpeechAPI` — Browser-native speech recognition module |
-| 172–330 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
-| 334–336 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
-| 337–2220 | `<style>` — All CSS, including CSS variables for theming |
-| 2228 | React hooks imports |
-| 2231–2272 | `Icons` — SVG icon components |
-| 2273–2484 | Utility functions (`generateId`, `safeHostname`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, NotebookLM filename↔title matching, etc.) |
-| 2486–2741 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
-| 2570–2576 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 2743–2806 | `Toast` — Notification component with undo support |
-| 2808–2959 | `MediaSessionManager` — Browser Media Session API integration |
-| 2961–3530 | `App` — Root component, state management, tab routing |
-| 3532–3629 | `EditableTitle` — Inline title editing component |
-| 3631–4097 | `NotebookLMModal` — Modal for tagging local audio as a NotebookLM podcast and linking its notebook URL/source |
-| 4099–6563 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
-| 6565–9728 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 9730–10078 | `LibraryView` — Source and note management, import/export |
-| 10080–10280 | `NoteSidebar` — Notes display, editing, and navigation |
-| 10282 | `ReactDOM.createRoot` render call |
+| 133–184 | `webSpeechAPI` — Browser-native speech recognition module |
+| 186–344 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
+| 350 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
+| 351–2278 | `<style>` — All CSS, including CSS variables for theming |
+| 2285 | `#app-source` script block opens (all JSX below lives here) |
+| 2286 | React hooks imports |
+| 2289–2336 | `Icons` — SVG icon components |
+| 2337–2680 | Utility functions (`generateId`, `safeHostname`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 2681–2938 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 2767–2775 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 2940–3003 | `Toast` — Notification component with undo support |
+| 3005–3156 | `MediaSessionManager` — Browser Media Session API integration |
+| 3158–3728 | `App` — Root component, state management, tab routing |
+| 3730–3827 | `EditableTitle` — Inline title editing component |
+| 3829–3983 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
+| 4295–6779 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
+| 6781–10123 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
+| 10125–10539 | `LibraryView` — Source and note management, import/export |
+| 10541–10741 | `NoteSidebar` — Notes display, editing, and navigation |
+| 10743 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -216,7 +217,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
 - **RSS feeds** — Custom parser for podcast episodes
-- **NotebookLM** — `notebooklm.google.com` opened in a new tab ("Open in NotebookLM" buttons); notebook URLs can be linked to local-audio sources
+- **Gemini Notebook** (formerly NotebookLM) — `notebook.google.com` opened in a new tab ("Open in Gemini Notebook" buttons); notebook URLs can be linked to local-audio sources. Google rebranded the product in July 2026 and moved it off `notebooklm.google.com`, which still redirects. `NOTEBOOK_URL_RE` accepts the new host plus both legacy hosts so links saved before the rebrand keep validating; `NOTEBOOK_HOME_URL` is the single home-page constant. Stored URLs are never rewritten — the redirect covers them. Internal field names (`isNotebookLM`, `notebookLMUrl`) and `Icons.NotebookLM` deliberately keep the old name so existing saved data is untouched.
 
 ### Browser APIs Used
 
@@ -281,8 +282,10 @@ There are no linting or formatting tools configured.
 `podcast`, `xvideo` (X.com/Twitter — itself either a `broadcast` or a `tweet`
 video), or `voice` (standalone voice-note recordings). X.com posts and X
 Articles loaded in the reader tab are saved as regular `article` sources. Local
-audio files (e.g. NotebookLM podcast exports) are `podcast` sources with
-`localFile: true`, and may carry a linked NotebookLM notebook URL.
+audio files (e.g. Gemini Notebook podcast exports) are `podcast` sources with
+`localFile: true`, and may carry a linked Gemini Notebook URL in `notebookLMUrl`.
+Use the `isNotebookSource(source)` helper rather than re-testing the title —
+it covers the `isNotebookLM` flag plus both the old and new brand names.
 
 **Note object**:
 ```js
@@ -322,16 +325,16 @@ keyless tier is rate-limited).
 
 ### Common Modification Areas
 
-- **UI/Theme**: CSS variables in `:root` (around line 338)
-- **Icons**: `Icons` object (line 2231)
-- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2345) plus `handleAskQuery` in both `ReaderView` and `MediaView`
-- **Persistence**: `HJStore` IndexedDB module (line 2486)
-- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 4099)
-- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 6565)
-- **NotebookLM linking**: `NotebookLMModal` (line 3631)
-- **Library/export**: `LibraryView` (line 9730)
-- **Notes panel**: `NoteSidebar` (line 10080)
-- **App-level state/routing**: `App` (line 2961)
+- **UI/Theme**: CSS variables in `:root` (around line 352)
+- **Icons**: `Icons` object (line 2289)
+- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2409) plus `handleAskQuery` in both `ReaderView` and `MediaView`
+- **Persistence**: `HJStore` IndexedDB module (line 2681)
+- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 4295)
+- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 6781)
+- **Gemini Notebook linking**: `NotebookLMModal` (line 3829); URL validation via `NOTEBOOK_URL_RE` (line 2625)
+- **Library/export**: `LibraryView` (line 10125)
+- **Notes panel**: `NoteSidebar` (line 10541)
+- **App-level state/routing**: `App` (line 3158)
 
 ### Version
 
