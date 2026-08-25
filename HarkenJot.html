@@ -646,6 +646,10 @@
       flex-shrink: 0;
     }
 
+    .source-info {
+      min-width: 0;
+    }
+
     .source-info h2 {
       font-family: 'Crimson Pro', serif;
       font-size: 1.25rem;
@@ -661,9 +665,30 @@
       font-size: 0.75rem;
       color: var(--text-muted);
       display: flex;
-      align-items: center;
+      /* One row, always: the source name is the only shrinkable child, so it
+         absorbs the overflow (truncated with an ellipsis) instead of being
+         bumped to a line of its own and leaving dead space beside the type
+         badge. Wrapping cost up to two extra lines of header height, which
+         comes straight out of the artwork/video area below. */
+      align-items: flex-start;
       gap: 0.5rem;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      overflow: hidden;
+    }
+
+    .source-meta .meta-name {
+      flex: 0 1 auto;
+      min-width: 6ch;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+    }
+
+    .source-meta > span:not(.meta-name),
+    .source-meta > button {
+      flex-shrink: 0;
     }
 
     .source-meta a {
@@ -3604,7 +3629,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.46.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.46.3</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6575,7 +6600,7 @@
                   </div>
                   <div className="source-meta">
                     <span className={`library-item-type ${currentSource?.type || 'article'}`}>{currentSource?.type || 'Article'}</span>
-                    {content.url && <a href={content.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(content.url)}</a>}
+                    {content.url && <a className="meta-name" title={content.url} href={content.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(content.url)}</a>}
                     <span>{content.sentences?.length ?? 0} sentences</span>
                     {!sources?.find(s => s.linkedSourceId === currentSource?.id) && (
                       content.url && !content.url.startsWith('blob:') ? (
@@ -9535,8 +9560,8 @@
                     <div className="source-meta">
                       <span className="library-item-type xvideo">xvideo</span>
                       {currentSource.channelName && (currentSource.url
-                        ? <a href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>@{currentSource.channelName}</a>
-                        : <span>@{currentSource.channelName}</span>)}
+                        ? <a className="meta-name" title={`@${currentSource.channelName}`} href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>@{currentSource.channelName}</a>
+                        : <span className="meta-name" title={`@${currentSource.channelName}`}>@{currentSource.channelName}</span>)}
                     </div>
                   </div>
                 </div>
@@ -9700,7 +9725,7 @@
                     </div>
                     <div className="source-meta">
                       <span className="library-item-type youtube">YouTube</span>
-                      {currentSource.channelName && (currentSource.url ? <a href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{currentSource.channelName}</a> : <span>{currentSource.channelName}</span>)}
+                      {currentSource.channelName && (currentSource.url ? <a className="meta-name" title={currentSource.channelName} href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{currentSource.channelName}</a> : <span className="meta-name" title={currentSource.channelName}>{currentSource.channelName}</span>)}
                       {duration > 0 && <span>{formatTime(duration)}</span>}
                       {currentSource.url && <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(currentSource.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>}
                     </div>
@@ -9845,7 +9870,7 @@
                   </div>
                   <div className="source-meta">
                     <span className="library-item-type podcast">Podcast</span>
-                    {podcastAudio.showName ? (podcastAudio.link ? <a href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span>{podcastAudio.showName}</span>) : isNotebookSource(currentSource) ? <a href={currentSource?.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a> : null}
+                    {podcastAudio.showName ? (podcastAudio.link ? <a className="meta-name" title={podcastAudio.showName} href={podcastAudio.link} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{podcastAudio.showName}</a> : <span className="meta-name" title={podcastAudio.showName}>{podcastAudio.showName}</span>) : isNotebookSource(currentSource) ? <a className="meta-name" href={currentSource?.notebookLMUrl || NOTEBOOK_HOME_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Gemini Notebook</a> : null}
                     <span>{formatTime(duration)}</span>
                     {currentSource?.notebookLMUrl ? (
                       <button type="button" title="Edit Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.Pencil /></button>
