@@ -2011,6 +2011,43 @@
       gap: 0.75rem;
     }
 
+    .source-picker-search {
+      position: relative;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .source-picker-search-input {
+      width: 100%;
+      padding: 0.5rem 2rem 0.5rem 0.75rem;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.875rem;
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-sizing: border-box;
+      outline: none;
+    }
+    .source-picker-search-input:focus {
+      border-color: var(--accent);
+    }
+    .source-picker-search-clear {
+      position: absolute;
+      top: 50%;
+      right: 1.4rem;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      padding: 0 0.25rem;
+      font-size: 1.1rem;
+      line-height: 1;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .source-picker-search-clear:hover {
+      color: var(--text-primary);
+    }
+
     .source-picker-list {
       list-style: none;
       padding: 0;
@@ -3629,7 +3666,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.46.3</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.47.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -3878,12 +3915,14 @@
       const [step, setStep] = useState(defaultStep);
       const [urlInput, setUrlInput] = useState('');
       const [urlError, setUrlError] = useState('');
+      const [pickQuery, setPickQuery] = useState('');
 
       useEffect(() => {
         if (show) {
           setStep(defaultStep);
           setUrlInput(currentSource?.notebookLMUrl || '');
           setUrlError('');
+          setPickQuery('');
         }
       }, [show, defaultStep, currentSource?.id]);
 
@@ -3891,21 +3930,37 @@
 
       const fileName = currentSource?.fileName || '';
       const now = Date.now();
-      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      // Recency decays on a 3-day half-life and is cut off past 30 days. Notebook
+      // podcasts are almost always generated from something added in the last day
+      // or two, so a just-added article outranks a lukewarm filename match — the
+      // search box below is the escape hatch when it doesn't.
+      const RECENCY_HALF_LIFE_DAYS = 3;
+      const RECENCY_WINDOW_DAYS = 30;
 
       const scoredSources = (sources || [])
         .filter(s => s.type === 'article' || s.type === 'pdf')
         .map(s => {
           const { score: titleScore, reason } = scoreSourceMatch(fileName, s.title);
-          const ageMs = now - new Date(s.createdAt).getTime();
-          const recencyScore = ageMs < SEVEN_DAYS_MS ? (1 - ageMs / SEVEN_DAYS_MS) : 0;
-          const finalScore = titleScore * 0.93 + recencyScore * 0.07;
+          const createdMs = new Date(s.createdAt).getTime();
+          const ageDays = Number.isFinite(createdMs) ? Math.max(0, (now - createdMs) / DAY_MS) : Infinity;
+          const recencyScore = ageDays <= RECENCY_WINDOW_DAYS
+            ? Math.pow(0.5, ageDays / RECENCY_HALF_LIFE_DAYS)
+            : 0;
+          const finalScore = titleScore * 0.65 + recencyScore * 0.35;
           return { ...s, _score: finalScore, _reason: reason || (recencyScore > 0.5 ? 'Recently added' : null) };
         })
         .sort((a, b) => b._score - a._score);
 
       const topMatch = scoredSources[0];
       const hasSuggestion = topMatch && topMatch._score >= 0.3;
+
+      // Filter for display only — ranking (and therefore which source carries the
+      // suggestion badge) is computed over the whole library, not the filtered view.
+      const pickFilter = pickQuery.trim().toLowerCase();
+      const visibleSources = pickFilter
+        ? scoredSources.filter(s => `${s.title || ''} ${s.url || ''}`.toLowerCase().includes(pickFilter))
+        : scoredSources;
 
       const podcastName = currentSource?.title || fileName.replace(/\.[^.]+$/, '') || 'this audio file';
 
@@ -3985,36 +4040,61 @@
                 <div className="modal-body" style={{ padding: scoredSources.length > 0 ? '0' : '1.5rem' }}>
                   {scoredSources.length > 0 ? (
                     <>
-                      {!hasSuggestion && (
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0.6rem 1rem 0', margin: 0 }}>Ordered suggestions — select manually</p>
+                      <div className="source-picker-search">
+                        <input
+                          type="text"
+                          className="source-picker-search-input"
+                          value={pickQuery}
+                          onChange={(e) => setPickQuery(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Escape') setPickQuery(''); }}
+                          placeholder="Search articles &amp; PDFs…"
+                        />
+                        {pickQuery && (
+                          <button
+                            type="button"
+                            className="source-picker-search-clear"
+                            title="Clear search"
+                            onClick={() => setPickQuery('')}
+                          >&times;</button>
+                        )}
+                      </div>
+                      {!pickFilter && !hasSuggestion && (
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0.6rem 1rem 0.4rem', margin: 0 }}>Ordered suggestions — select manually</p>
                       )}
-                      <ul className="source-picker-list">
-                        {scoredSources.map((source, idx) => (
-                          <li
-                            key={source.id}
-                            className="source-picker-item"
-                            onClick={() => { onLinkSource(source.id); onClose(); }}
-                            style={hasSuggestion && idx === 0 && source._score >= 0.6 ? { borderLeft: '3px solid var(--accent)', paddingLeft: 'calc(1rem - 3px)' } : {}}
-                          >
-                            <div className="title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              {source.title}
-                              {hasSuggestion && idx === 0 && (
-                                <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'var(--accent)', color: 'white', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                                  {source._score >= 0.6 ? 'Best match' : 'Suggested'}
-                                </span>
-                              )}
-                            </div>
-                            <div className="meta">
-                              <span className={`library-item-type ${source.type}`}>{source.type}</span>
-                              {' '}&middot;{' '}
-                              {new Date(source.createdAt).toLocaleDateString()}
-                              {source._reason && idx === 0 && hasSuggestion && (
-                                <>{' '}&middot;{' '}<span style={{ color: 'var(--accent)' }}>{source._reason}</span></>
-                              )}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                      {visibleSources.length > 0 ? (
+                        <ul className="source-picker-list">
+                          {visibleSources.map((source) => {
+                            const isTop = hasSuggestion && source.id === topMatch.id;
+                            return (
+                              <li
+                                key={source.id}
+                                className="source-picker-item"
+                                onClick={() => { onLinkSource(source.id); onClose(); }}
+                                style={isTop && source._score >= 0.6 ? { borderLeft: '3px solid var(--accent)', paddingLeft: 'calc(1rem - 3px)' } : {}}
+                              >
+                                <div className="title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                  {source.title}
+                                  {isTop && (
+                                    <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: 'var(--accent)', color: 'white', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                      {source._score >= 0.6 ? 'Best match' : 'Suggested'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="meta">
+                                  <span className={`library-item-type ${source.type}`}>{source.type}</span>
+                                  {' '}&middot;{' '}
+                                  {new Date(source.createdAt).toLocaleDateString()}
+                                  {source._reason && isTop && (
+                                    <>{' '}&middot;{' '}<span style={{ color: 'var(--accent)' }}>{source._reason}</span></>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', textAlign: 'center', padding: '1rem 1.5rem 1.5rem', margin: 0 }}>No articles or PDFs match &ldquo;{pickQuery.trim()}&rdquo;.</p>
+                      )}
                     </>
                   ) : (
                     <p style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>No articles or PDFs in your library yet. You can link one later.</p>
