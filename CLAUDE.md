@@ -375,6 +375,22 @@ article fallbacks, Wayback/AMP/WordPress/Jina run concurrently but are awaited
 in preference order; Jina is only started after tier-1 extraction fails (its
 keyless tier is rate-limited).
 
+**A bot wall is not an article.** WAF challenge pages (PerimeterX, Cloudflare,
+"access denied" shells) come back as HTTP 200 with enough boilerplate to clear
+a length gate, so accepting one saves the wall as the article body *and* skips
+every fallback. `looksLikeBlockedPage()` gates every extraction result:
+`BLOCKED_PAGE_HARD` phrases never appear in real prose and reject outright,
+while `BLOCKED_PAGE_SOFT` ones (a security column may genuinely discuss
+CAPTCHAs) only count against documents under 1500 chars. Extraction results
+thinner than `THIN_ARTICLE_CHARS` (900) do not end the search either — the
+fallback tiers still run and the longest result wins, which is what catches
+paywall stubs and consent shells.
+
+Hosts in `BOT_WALLED_HOSTS` (currently `forbes.com`) start Wayback and Jina
+*before* the proxy chain rather than after it. The chain still runs — a proxy
+that slips past the wall yields the best copy of the article — but its ~13 s of
+failing no longer stacks on top of the routes that work.
+
 ## Making Changes
 
 ### Adding a New Feature
