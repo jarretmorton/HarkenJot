@@ -268,8 +268,10 @@ loads on demand from `cdn.jsdelivr.net`.
 
 ### External APIs Consumed
 
-- **CORS proxies** — `corsproxy.io`, `api.allorigins.win`, `api.codetabs.com`, `thingproxy.freeboard.io` for fetching articles, RSS feeds, and oEmbed/scraped metadata
+- **CORS proxies** — `corsproxy.io` (both the bare `?<url>` and the newer `?url=` forms), `api.allorigins.win`, `api.codetabs.com`, `thingproxy.freeboard.io` for fetching articles, RSS feeds, and oEmbed/scraped metadata
 - **Jina Reader** — `r.jina.ai` as a fallback for article text extraction
+- **Wayback Machine** — `archive.org/wayback/available` to locate the closest snapshot, then `web.archive.org/web/<ts>id_/<url>` for the bytes as originally crawled (the `id_` modifier skips the injected toolbar). CORS-enabled, so no proxy needed
+- **archive.today** — `archive.ph` / `archive.is` `/newest/<url>` snapshots via the proxy chain; archived with a real browser, so these hold the rendered article for publishers that wall every proxy
 - **YouTube** — IFrame API for playback; `youtube.com/oembed` for video metadata
 - **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
 - **X.com / Twitter oEmbed** — `publish.twitter.com/oembed` for embedding X.com videos and tweets
@@ -386,10 +388,16 @@ thinner than `THIN_ARTICLE_CHARS` (900) do not end the search either — the
 fallback tiers still run and the longest result wins, which is what catches
 paywall stubs and consent shells.
 
-Hosts in `BOT_WALLED_HOSTS` (currently `forbes.com`) start Wayback and Jina
-*before* the proxy chain rather than after it. The chain still runs — a proxy
-that slips past the wall yields the best copy of the article — but its ~13 s of
-failing no longer stacks on top of the routes that work.
+Hosts in `BOT_WALLED_HOSTS` (currently `forbes.com`) start Wayback,
+archive.today and Jina *before* the proxy chain rather than after it. The chain
+still runs — a proxy that slips past the wall yields the best copy of the
+article — but its latency no longer stacks on top of the routes that work.
+
+The fallback order is Wayback → archive.today → AMP → WordPress → Jina. The two
+archive routes lead because a WAF blocks the *publisher's* origin, not the
+archive's, so a snapshot is the likeliest thing to survive. When every route
+fails on a bot-walled host the toast names the host rather than claiming the
+content could not be extracted — nothing was ever fetched to extract.
 
 ## Making Changes
 

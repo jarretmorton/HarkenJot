@@ -3719,7 +3719,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.48.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5207,6 +5207,14 @@
                 extract: (data) => data
               },
               {
+                // corsproxy.io moved to a named ?url= parameter; the bare form
+                // above still answers for some callers but not reliably, so both
+                // shapes are in the race.
+                name: 'corsproxy.io/url',
+                url: (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+                extract: (data) => data
+              },
+              {
                 name: 'codetabs',
                 url: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
                 extract: (data) => data
@@ -5426,16 +5434,73 @@
           // Helper: Wayback Machine snapshot. archive.org sends CORS headers, so
           // this runs without a proxy — which is exactly why it survives on sites
           // whose WAF blocks the proxies.
+          //
+          // The availability API is asked first: /web/2/ answers with a redirect
+          // chain, or with an HTML "no snapshot" page that is easy to mistake for
+          // content, whereas the API says up front whether anything was captured
+          // and when. The `id_` modifier on the resulting URL returns the bytes as
+          // originally crawled — no Wayback toolbar grafted into the DOM, no
+          // rewritten asset URLs for the extractor to trip over.
           const fetchWayback = async () => {
+            const target = url.startsWith('http') ? url : 'https://' + url;
+            let snapshotUrl = null;
             try {
-              console.log('Trying Wayback Machine...');
-              const archiveResponse = await fetchWithTimeout(`https://web.archive.org/web/2/${url}`, 10000);
-              if (!archiveResponse.ok) return null;
-              return tryExtractArticle(await archiveResponse.text());
+              const probe = await fetchWithTimeout(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, 8000);
+              if (probe.ok) {
+                const data = await probe.json();
+                const snap = data?.archived_snapshots?.closest;
+                if (snap?.available && snap.timestamp) {
+                  snapshotUrl = `https://web.archive.org/web/${snap.timestamp}id_/${target}`;
+                  console.log('[HJ:article] Wayback snapshot', snap.timestamp);
+                } else {
+                  console.log('[HJ:article] Wayback: no snapshot on record');
+                }
+              }
             } catch (e) {
-              console.log('Wayback Machine failed:', e.message);
-              return null;
+              console.log('[HJ:article] Wayback availability lookup failed:', e?.message || e);
             }
+            // Fall back to the redirect form even when the API said nothing — its
+            // index lags, and /web/2/ sometimes resolves a capture the API misses.
+            for (const candidate of [snapshotUrl, `https://web.archive.org/web/2/${target}`].filter(Boolean)) {
+              try {
+                console.log('Trying Wayback Machine:', candidate);
+                const response = await fetchWithTimeout(candidate, 12000);
+                if (!response.ok) {
+                  console.log(`[HJ:article] Wayback: http ${response.status}`);
+                  continue;
+                }
+                const result = tryExtractArticle(await response.text());
+                if (result) return result;
+              } catch (e) {
+                console.log('Wayback Machine failed:', e.message);
+              }
+            }
+            return null;
+          };
+
+          // Helper: archive.today snapshot. It archives with a real browser, so
+          // its copies contain the rendered article rather than a JS shell, and
+          // paywalled or bot-walled publishers get archived there constantly —
+          // which makes it the route most likely to hold a story that every proxy
+          // was served a challenge page for. It sends no CORS headers of its own,
+          // so it has to go through the proxy chain; the proxies are only blocked
+          // by the *publisher's* WAF, not by archive.today.
+          const tryArchiveToday = async () => {
+            const target = url.startsWith('http') ? url : 'https://' + url;
+            for (const host of ['archive.ph', 'archive.is']) {
+              try {
+                console.log(`Trying ${host}...`);
+                const html = await fetchHtmlViaProxies(`https://${host}/newest/${target}`);
+                const result = tryExtractArticle(html);
+                if (result && result.text.length >= 300) {
+                  console.log('[HJ:article] archive.today success', { host, chars: result.text.length });
+                  return result;
+                }
+              } catch (e) {
+                console.log(`[HJ:article] ${host} failed:`, e?.message || e);
+              }
+            }
+            return null;
           };
 
           // Strategy 0 (X.com): posts and Articles from x.com / twitter.com.
@@ -5831,6 +5896,7 @@
           // the wall, its extraction is the best copy of the article we can get.
           const botWalled = isBotWalledHost(url);
           const earlyWaybackP = botWalled ? fetchWayback() : null;
+          const earlyArchiveP = botWalled ? tryArchiveToday().catch(() => null) : null;
           const earlyJinaP = botWalled ? tryJinaReader(url).catch(() => null) : null;
 
           let html = await fetchHtmlViaProxies(url);
@@ -5899,7 +5965,11 @@
               ? Promise.resolve(null)
               : tryWordPressApi(url).catch(() => null);
 
-            // Strategy 5: Jina Reader — handles bot-protected pages (Cloudflare
+            // Strategy 5: archive.today — a browser-rendered snapshot, and the
+            // route with the best odds on a publisher that walls every proxy.
+            const archiveP = earlyArchiveP || tryArchiveToday().catch(() => null);
+
+            // Strategy 6: Jina Reader — handles bot-protected pages (Cloudflare
             // etc.) that defeat the proxies, archive.org, AMP, and site APIs.
             const jinaP = earlyJinaP || tryJinaReader(url).catch(() => null);
 
@@ -5919,6 +5989,7 @@
 
             const fallbackTiers = [
               [waybackP, 'Wayback Machine'],
+              [archiveP, 'archive.today'],
               [ampP, 'AMP version'],
               [wpP, 'WordPress REST API'],
               [jinaP, 'Jina reader'],
@@ -5934,7 +6005,12 @@
           // page as the "article" produced garbage entries, so it is not used.
 
           if (!extracted) {
-            showToast('Could not extract enough content. Try pasting manually.');
+            // "Could not extract" reads like a parser bug. On a walled publisher
+            // nothing was ever fetched to parse, and pasting really is the only
+            // way through — say so rather than implying the app mis-read the page.
+            showToast(botWalled
+              ? `${safeHostname(url)} blocked every fetch route — paste the article text below.`
+              : 'Could not extract enough content. Try pasting manually.');
             setShowManualInput(true);
             setLoading(false);
             return;
