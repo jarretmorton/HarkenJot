@@ -393,6 +393,17 @@ archive.today and Jina *before* the proxy chain rather than after it. The chain
 still runs — a proxy that slips past the wall yields the best copy of the
 article — but its latency no longer stacks on top of the routes that work.
 
+**Page furniture is not the article.** Jina returns the whole rendered page as
+markdown, and an archive capture carries the publisher's masthead (plus, without
+`id_`, Wayback's own toolbar). Unwrapping links and collapsing whitespace in one
+pass welds all of it onto the front of the story as a preamble of stray link
+text. `tryJinaReader` therefore classifies markdown **line by line** before
+collapsing — link-dense lines, and short lines without sentence punctuation, are
+furniture — and starts the article at the first line that isn't; it keeps the
+untrimmed text if the trim would leave under 300 chars. `extractArticleContent`
+does the DOM-side equivalent, removing elements with 5+ links where 70%+ of the
+text sits inside them and no real paragraph does.
+
 The fallback order is Wayback → archive.today → AMP → WordPress → Jina. The two
 archive routes lead because a WAF blocks the *publisher's* origin, not the
 archive's, so a snapshot is the likeliest thing to survive. When every route

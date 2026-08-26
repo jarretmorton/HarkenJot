@@ -3719,7 +3719,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4811,6 +4811,25 @@
           doc.querySelectorAll(selector).forEach(el => el.remove());
         });
 
+        // Strip link farms — menus, section rails and "more from us" lists that
+        // aren't marked up as <nav>. Wayback's injected toolbar is one of these,
+        // and so is most of a news site's masthead. The density analysis and the
+        // body-text fallback below otherwise weld them onto the front of the
+        // article as a preamble of stray link text. Guarded three ways so an
+        // in-article list of references or further reading survives: it needs
+        // several links, almost all of the element's text has to be inside them,
+        // and any real paragraph within means this is content, not a menu.
+        doc.querySelectorAll('ul, ol, div, section').forEach(el => {
+          const links = el.querySelectorAll('a');
+          if (links.length < 5) return;
+          const total = el.textContent.replace(/\s+/g, ' ').trim().length;
+          if (!total) return;
+          const linked = Array.from(links).reduce((n, a) => n + a.textContent.trim().length, 0);
+          if (linked / total < 0.7) return;
+          if (Array.from(el.querySelectorAll('p')).some(para => para.textContent.trim().length > 100)) return;
+          el.remove();
+        });
+
         // Get the title from multiple sources
         const title = doc.querySelector('meta[property="og:title"]')?.content ||
                       doc.querySelector('h1')?.textContent ||
@@ -5408,9 +5427,37 @@
               // Response shape: "Title: ...\nURL Source: ...\nMarkdown Content:\n..."
               const titleMatch = text.match(/^Title:\s*(.+)$/m);
               const contentIdx = text.indexOf('Markdown Content:');
-              let body = contentIdx >= 0 ? text.slice(contentIdx + 'Markdown Content:'.length) : text;
-              // Light markdown cleanup: drop images, unwrap links, strip heading/emphasis markers
-              body = body
+              const rawBody = contentIdx >= 0 ? text.slice(contentIdx + 'Markdown Content:'.length) : text;
+
+              // Jina hands back the whole rendered page as markdown — nav and all.
+              // Ahead of the story sit link-only lines (section menus, "Subscribe To
+              // Newsletters", social rails) and short fragments (kickers, datelines,
+              // BETA badges). Unwrapping the links and collapsing whitespace in one
+              // pass, as this used to, welds every one of those words onto the front
+              // of the article as a long preamble of stray link text. So classify
+              // line by line while the markdown structure still exists, and start the
+              // article at the first line that isn't furniture.
+              const linkChars = (line) => {
+                let n = 0;
+                line.replace(/\[([^\]]*)\]\([^)]*\)/g, (m) => { n += m.length; return m; });
+                return n;
+              };
+              // Phrases that are furniture wherever they appear in the run-up, even
+              // when they happen to be punctuated like a sentence.
+              const LEADING_FURNITURE = /^(subscribe to newsletters|sign in|sign up|edit story|share to|follow me on|this is a beta experience|forbes councils member|expert panel)/i;
+              const isFurniture = (line) => {
+                const raw = line.trim();
+                if (!raw) return true;
+                const bare = raw.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_#>`=|-]/g, '').trim();
+                if (!bare) return true;
+                if (LEADING_FURNITURE.test(bare)) return true;
+                // Mostly link markup: a menu or a section rail, however long.
+                if (linkChars(raw) / raw.length > 0.4) return true;
+                // Short and not a sentence: a kicker, dateline, byline or badge.
+                return bare.length < 100 && !/[.!?]["')\]]?$/.test(bare);
+              };
+
+              const toPlain = (lines) => lines.join('\n')
                 .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
                 .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
                 .replace(/^#{1,6}\s+/gm, '')
@@ -5418,6 +5465,17 @@
                 .replace(/^[-=*]{3,}\s*$/gm, ' ')
                 .replace(/\s+/g, ' ')
                 .trim();
+
+              const lines = rawBody.split('\n');
+              const firstContent = lines.findIndex(line => !isFurniture(line));
+              const untrimmed = toPlain(lines);
+              const trimmed = firstContent > 0 ? toPlain(lines.slice(firstContent)) : untrimmed;
+              // Never let the trim eat the article: a page with no line that reads
+              // as prose keeps its original text rather than coming back empty.
+              let body = trimmed.length >= 300 ? trimmed : untrimmed;
+              if (body !== untrimmed) {
+                console.log(`[HJ:article] Jina reader: dropped ${untrimmed.length - body.length} chars of leading page furniture`);
+              }
               if (body.length < 200) {
                 console.log(`[HJ:article] Jina reader: too short (${body.length} chars)`);
                 return null;
