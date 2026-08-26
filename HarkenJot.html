@@ -3021,6 +3021,59 @@
       } catch { return false; }
     };
 
+    // Bot walls, CAPTCHA interstitials and "access denied" shells are served
+    // with HTTP 200 and carry enough boilerplate to clear an extraction length
+    // gate, so they get saved as the article and the entire fallback chain is
+    // skipped. Any WAF-fronted publisher (Forbes among them) hits this on every
+    // load: the CORS proxy fetches from a datacenter IP and gets the challenge
+    // page instead of the story. Recognising those pages is what lets the
+    // caller fall through to Wayback / AMP / Jina instead of banking the wall.
+    //
+    // HARD markers are phrases no article body contains. SOFT markers do turn up
+    // in genuine prose — a security column may well discuss CAPTCHAs — so they
+    // only count against a document too short to be an article in the first place.
+    const BLOCKED_PAGE_HARD = [
+      /please enable js and disable any ad ?blocker/i,
+      /enable javascript and cookies to continue/i,
+      /checking your browser before access/i,
+      /verify(?:ing)? (?:that )?you are (?:a )?human/i,
+      /attention required!?\s*\|?\s*cloudflare/i,
+      /just a moment\s*\.{3}/i,
+      /access to this page has been denied/i,
+      /you (?:have been|are) blocked/i,
+      /request unsuccessful\.?\s*incapsula/i,
+      /pardon our interruption/i,
+      /cloudflare ray id/i,
+      /ddos protection by cloudflare/i,
+      /your request has been blocked/i,
+    ];
+    const BLOCKED_PAGE_SOFT = [
+      /\bcaptcha\b/i,
+      /403 forbidden/i,
+      /unusual traffic from your computer/i,
+      /are you a robot/i,
+      /access denied/i,
+      /\bray id:/i,
+      /security check/i,
+      /this site requires javascript to (?:run|work)/i,
+    ];
+    const looksLikeBlockedPage = (text) => {
+      if (!text) return false;
+      const sample = text.slice(0, 4000);
+      if (BLOCKED_PAGE_HARD.some(re => re.test(sample))) return true;
+      return text.length < 1500 && BLOCKED_PAGE_SOFT.some(re => re.test(sample));
+    };
+
+    // Publishers whose WAF reliably serves a challenge page to datacenter IPs.
+    // The CORS proxy chain cannot win here — it just takes ~13s to lose — so
+    // these hosts start the routes that do work (Wayback, Jina's headless
+    // renderer) up front instead of waiting for the chain to fail first.
+    const BOT_WALLED_HOSTS = ['forbes.com'];
+    const isBotWalledHost = (url) => {
+      const h = safeHostname(url).replace(/^www\./, '');
+      return BOT_WALLED_HOSTS.some(d => h === d || h.endsWith('.' + d));
+    };
+
     // Toast Component
     function Toast({ message, show, onUndo, showUndo }) {
       return (
@@ -3666,7 +3719,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.47.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.48.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4765,27 +4818,32 @@
                       structuredTitle ||
                       'Untitled Article';
 
-        // Try to find main content in order of preference
+        // Try to find main content in order of preference. Specific article-body
+        // containers come first: a page that has both <article> and .article-body
+        // wants the inner one, because the outer element usually also wraps the
+        // byline furniture, newsletter promos and "more from us" recirculation
+        // rails. Forbes is the case in point — its <article> swallows the lot.
+        // Generic page-level containers stay at the end as the catch-all.
         const contentSelectors = [
-          'article',
-          '[role="main"]',
-          'main',
           '.available-content',     // Substack
           '.body.markup',           // Substack
           'div.markup',             // Substack
           '.post-content-wrapper',  // Substack
+          '.article-body',          // Forbes and most news CMSes
+          '.article-body-container',
+          '.body-container',
+          '#article-body',
           '.article-content',
           '.post-content',
           '.entry-content',
-          '.content',
-          '.article-body',
-          '.article-body-container',
-          '.body-container',
           '.story-body',
           '.story-content',
+          'article',
+          '[role="main"]',
+          'main',
+          '.content',
           '#content',
-          '#article',
-          '#article-body'
+          '#article'
         ];
 
         let contentElement = null;
@@ -4822,9 +4880,12 @@
           text = cleanText(contentElement.textContent);
         }
 
-        // Strategy C: text density analysis — find the block most likely to be article body
-        if (text.length < 200) {
-          console.log('Content element insufficient, trying text density analysis');
+        // Strategy C: text density analysis — find the block most likely to be article
+        // body. Runs against thin results too, not just empty ones: a selector can
+        // match a teaser or a stub while the full body sits in a sibling block. It
+        // only ever replaces `text` with something longer, so it cannot lose content.
+        if (text.length < 900) {
+          console.log('Content element thin, trying text density analysis');
           const candidates = doc.querySelectorAll('div, section, article, main');
           let bestElement = null;
           let bestScore = 0;
@@ -4861,12 +4922,34 @@
           if (bodyText.length > text.length) text = bodyText;
         }
 
-        // Strategy E: structured data override (JSON-LD / __NEXT_DATA__)
+        // Strategy E: structured data (JSON-LD articleBody / __NEXT_DATA__).
+        // Publishers that bury the story in nav rails, newsletter promos and
+        // "more from us" recirculation hand the DOM strategies a few hundred
+        // characters of furniture — which used to clear the old `< 200` gate and
+        // lock the real body out for good. The structured body is the
+        // publisher's own authored copy, so whenever it is longer than whatever
+        // the DOM produced, it is the article and the DOM found furniture.
+        //
+        // Some sites (and the __NEXT_DATA__ walker's looser `body`/`content`
+        // keys) hand back HTML rather than plain text, so unwrap it first.
+        const structuredToText = (raw) => {
+          if (!raw) return '';
+          let out = raw;
+          if (/<\/?[a-z][\s\S]*>/i.test(out)) {
+            try { out = new DOMParser().parseFromString(out, 'text/html').body.textContent || ''; }
+            catch (e) { /* leave the raw string alone */ }
+          }
+          return cleanText(out);
+        };
+
         let usedStructuredData = false;
-        if (text.length < 200 && structuredText) {
-          console.log('DOM extraction insufficient, using structured data (JSON-LD / __NEXT_DATA__)');
-          text = cleanText(structuredText);
-          usedStructuredData = true;
+        if (structuredText) {
+          const structured = structuredToText(structuredText);
+          if (structured.length > text.length) {
+            console.log('Using structured data (JSON-LD / __NEXT_DATA__):', structured.length, 'chars vs', text.length, 'from DOM');
+            text = structured;
+            usedStructuredData = true;
+          }
         }
 
         // Prefer structured title when we fell back to structured data
@@ -5237,7 +5320,14 @@
           const tryExtractArticle = (html) => {
             if (!html) return null;
             const result = extractArticleContent(html);
-            return result.text.length >= 100 ? result : null;
+            if (result.text.length < 100) return null;
+            // A WAF challenge page is a 200 with plenty of text on it. Banking one
+            // saves the bot wall as the article body and skips every fallback.
+            if (looksLikeBlockedPage(result.text) || looksLikeBlockedPage(result.title)) {
+              console.log('[HJ:article] extraction rejected: bot-check / access-denied page');
+              return null;
+            }
+            return result;
           };
 
           // Helper: WordPress REST API article fetch. WordPress sites
@@ -5329,6 +5419,21 @@
               return { title, text: body };
             } catch (e) {
               console.log('[HJ:article] Jina reader failed:', e?.message || e);
+              return null;
+            }
+          };
+
+          // Helper: Wayback Machine snapshot. archive.org sends CORS headers, so
+          // this runs without a proxy — which is exactly why it survives on sites
+          // whose WAF blocks the proxies.
+          const fetchWayback = async () => {
+            try {
+              console.log('Trying Wayback Machine...');
+              const archiveResponse = await fetchWithTimeout(`https://web.archive.org/web/2/${url}`, 10000);
+              if (!archiveResponse.ok) return null;
+              return tryExtractArticle(await archiveResponse.text());
+            } catch (e) {
+              console.log('Wayback Machine failed:', e.message);
               return null;
             }
           };
@@ -5719,6 +5824,15 @@
           // For web articles, try multiple fetch strategies
           showToast('Fetching article content...');
 
+          // On a bot-walled publisher the proxy chain below is already lost — it
+          // just spends ~13s discovering that. Start the two routes that do get
+          // through now so their latency overlaps the doomed chain rather than
+          // stacking on top of it. Tier-1 still runs: if a proxy does slip past
+          // the wall, its extraction is the best copy of the article we can get.
+          const botWalled = isBotWalledHost(url);
+          const earlyWaybackP = botWalled ? fetchWayback() : null;
+          const earlyJinaP = botWalled ? tryJinaReader(url).catch(() => null) : null;
+
           let html = await fetchHtmlViaProxies(url);
 
           // Check if the response is actually a PDF (not detected by URL pattern)
@@ -5742,32 +5856,39 @@
 
           let extracted = tryExtractArticle(html);
 
-          // Strategies 2–5, run concurrently once tier-1 extraction fails, but awaited
-          // in the original preference order (Wayback > AMP > WordPress > Jina) so the
-          // result is identical to the old serial chain — only the wall time changes
-          // (max of the tiers instead of their sum). Jina is deliberately NOT started
-          // before this point: its keyless tier is rate-limited, and the proxies handle
-          // most articles without it.
-          if (!extracted) {
+          // Anything this short is a paywall stub, a consent shell, or a page
+          // whose real body never survived the proxy. Tier-1 used to bank those
+          // on a 100-character gate, which meant the fallbacks below never ran.
+          // Below the threshold we keep the tier-1 text as a floor but go
+          // looking for something better.
+          const THIN_ARTICLE_CHARS = 900;
+
+          // Strategies 2–5, run concurrently once tier-1 extraction fails or comes
+          // back thin, but awaited in the original preference order (Wayback > AMP >
+          // WordPress > Jina) so the result matches the old serial chain — only the
+          // wall time changes (max of the tiers instead of their sum). Jina is
+          // deliberately NOT started before this point: its keyless tier is
+          // rate-limited, and the proxies handle most articles without it.
+          if (!extracted || extracted.text.length < THIN_ARTICLE_CHARS) {
             showToast('Trying fallback sources...');
 
             // Strategy 2: Wayback Machine (archive.org has CORS headers, no proxy needed)
-            const waybackP = (async () => {
+            const waybackP = earlyWaybackP || fetchWayback();
+
+            // Strategy 3: Google AMP version via proxies (simpler HTML, often bypasses paywalls).
+            // /amp/ goes on the end of the *path*, before any query or fragment —
+            // publisher share links routinely carry trackers (Forbes appends ?sh=…),
+            // and blindly appending produced "…?sh=abc/amp/", which is not a URL that
+            // exists anywhere.
+            const ampUrl = (() => {
               try {
-                console.log('Trying Wayback Machine...');
-                const archiveResponse = await fetchWithTimeout(`https://web.archive.org/web/2/${url}`, 10000);
-                if (!archiveResponse.ok) return null;
-                const result = tryExtractArticle(await archiveResponse.text());
-                if (result) console.log('Wayback Machine succeeded');
-                return result;
+                const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+                u.pathname = u.pathname.replace(/\/+$/, '') + '/amp/';
+                return u.toString();
               } catch (e) {
-                console.log('Wayback Machine failed:', e.message);
-                return null;
+                return url.replace(/\/+$/, '') + '/amp/';
               }
             })();
-
-            // Strategy 3: Google AMP version via proxies (simpler HTML, often bypasses paywalls)
-            const ampUrl = url.replace(/\/+$/, '') + '/amp/';
             const ampP = (ampUrl !== url)
               ? fetchHtmlViaProxies(ampUrl).then(tryExtractArticle).catch(() => null)
               : Promise.resolve(null);
@@ -5780,12 +5901,32 @@
 
             // Strategy 5: Jina Reader — handles bot-protected pages (Cloudflare
             // etc.) that defeat the proxies, archive.org, AMP, and site APIs.
-            const jinaP = tryJinaReader(url).catch(() => null);
+            const jinaP = earlyJinaP || tryJinaReader(url).catch(() => null);
 
-            extracted = await waybackP;
-            if (!extracted) { extracted = await ampP; if (extracted) console.log('AMP version succeeded'); }
-            if (!extracted) { extracted = await wpP; if (extracted) console.log('WordPress REST API succeeded'); }
-            if (!extracted) { extracted = await jinaP; if (extracted) console.log('Jina reader succeeded'); }
+            // Walk the tiers in preference order, keeping the longest result seen
+            // so far and stopping as soon as one returns something article-sized.
+            // Keeping the longest matters because a tier can "succeed" with a
+            // stub — an archived paywall snapshot, an AMP page that is all
+            // furniture — and the old first-non-null wins rule banked it while a
+            // later tier held the whole story.
+            let best = extracted;
+            const consider = (result, label) => {
+              if (!result) return false;
+              console.log(`[HJ:article] ${label} succeeded (${result.text.length} chars)`);
+              if (!best || result.text.length > best.text.length) best = result;
+              return result.text.length >= THIN_ARTICLE_CHARS;
+            };
+
+            const fallbackTiers = [
+              [waybackP, 'Wayback Machine'],
+              [ampP, 'AMP version'],
+              [wpP, 'WordPress REST API'],
+              [jinaP, 'Jina reader'],
+            ];
+            for (const [tierPromise, label] of fallbackTiers) {
+              if (consider(await tierPromise, label)) break;
+            }
+            extracted = best;
           }
 
           // Google Webcache (webcache.googleusercontent.com) was retired in 2024 and
