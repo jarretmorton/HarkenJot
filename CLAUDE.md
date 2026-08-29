@@ -282,6 +282,15 @@ loads on demand from `cdn.jsdelivr.net`.
 - **RSS feeds** — Custom parser for podcast episodes
 - **Gemini Notebook** (formerly NotebookLM) — `notebook.google.com` opened in a new tab ("Open in Gemini Notebook" buttons); notebook URLs can be linked to local-audio sources. Google rebranded the product in July 2026 and moved it off `notebooklm.google.com`, which still redirects. `NOTEBOOK_URL_RE` accepts the new host plus both legacy hosts so links saved before the rebrand keep validating; `NOTEBOOK_HOME_URL` is the single home-page constant. Stored URLs are never rewritten — the redirect covers them. Internal field names (`isNotebookLM`, `notebookLMUrl`) and `Icons.NotebookLM` deliberately keep the old name so existing saved data is untouched.
 
+  **There is no create-notebook deep link — do not go looking for one again.** The "Open in
+  Gemini Notebook" buttons copy the source URL and open `NOTEBOOK_HOME_URL`, which lands on the
+  notebook *list*; the screen you paste a link into is a modal on an already-created notebook
+  (`/notebook/<uuid>`, a fresh id each time), so there is nothing stable to link to.
+  `/notebook/new` bounces back to the list. Google documents no URL entry point either, and the
+  popular NotebookLM Web Importer extension resorts to intercepting and replaying the private
+  add-source API rather than using one. The toast therefore names the extra tap ("Create new")
+  instead of pretending the button can skip it.
+
 ### Browser APIs Used
 
 - Web Speech API, Web Audio API, MediaRecorder (speech recognition / voice capture)

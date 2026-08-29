@@ -2706,6 +2706,11 @@
     // notebook.google.com in July 2026; the legacy notebooklm.google.com and
     // notebooklm.google hosts still redirect there, so keep accepting all three —
     // notebook URLs saved before the rebrand must continue to validate and open.
+    // The home page is the notebook list, and there is deliberately no create-notebook
+    // deep link here: the "paste a link" panel is a modal on an already-created notebook
+    // (its URL is /notebook/<uuid>, minted per notebook), so there is nothing stable to
+    // open. /notebook/new bounces back to the list. Hence "copy the URL, then open the
+    // home page" — the toast carries the one extra tap.
     const NOTEBOOK_HOME_URL = 'https://notebook.google.com/';
     const NOTEBOOK_URL_RE = /^https:\/\/(?:notebook\.google\.com|notebooklm\.google(?:\.com)?)\/notebook\/[\w-]+/i;
 
@@ -3719,7 +3724,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.2</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6959,7 +6964,7 @@
                     <span>{content.sentences?.length ?? 0} sentences</span>
                     {!sources?.find(s => s.linkedSourceId === currentSource?.id) && (
                       content.url && !content.url.startsWith('blob:') ? (
-                        <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(content.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>
+                        <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(content.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — tap “Create new” in Gemini Notebook, then paste it as a source'); }}><Icons.NotebookLM /></button>
                       ) : (
                         <button type="button" title="Open Gemini Notebook" onClick={() => { window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
                       )
@@ -10082,7 +10087,7 @@
                       <span className="library-item-type youtube">YouTube</span>
                       {currentSource.channelName && (currentSource.url ? <a className="meta-name" title={currentSource.channelName} href={currentSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{currentSource.channelName}</a> : <span className="meta-name" title={currentSource.channelName}>{currentSource.channelName}</span>)}
                       {duration > 0 && <span>{formatTime(duration)}</span>}
-                      {currentSource.url && <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(currentSource.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>}
+                      {currentSource.url && <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { navigator.clipboard.writeText(currentSource.url).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — tap “Create new” in Gemini Notebook, then paste it as a source'); }}><Icons.NotebookLM /></button>}
                     </div>
                   </div>
                 </div>
@@ -10230,7 +10235,7 @@
                     {currentSource?.notebookLMUrl ? (
                       <button type="button" title="Edit Gemini Notebook URL" onClick={() => { setNotebookLMStep('url'); setShowNotebookLMModal(true); }}><Icons.Pencil /></button>
                     ) : (podcastAudio.link || currentSource?.url) ? (
-                      <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { const u = podcastAudio.link || currentSource?.url; navigator.clipboard.writeText(u).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — paste into Gemini Notebook to add as a source'); }}><Icons.NotebookLM /></button>
+                      <button type="button" title="Open in Gemini Notebook (copies URL)" onClick={() => { const u = podcastAudio.link || currentSource?.url; navigator.clipboard.writeText(u).catch(() => {}); window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); showToast('URL copied — tap “Create new” in Gemini Notebook, then paste it as a source'); }}><Icons.NotebookLM /></button>
                     ) : !isNotebookSource(currentSource) ? (
                       <button type="button" title="Open Gemini Notebook" onClick={() => { window.open(NOTEBOOK_HOME_URL, '_blank', 'noopener noreferrer'); }}><Icons.NotebookLM /></button>
                     ) : (
