@@ -2552,6 +2552,7 @@
     // which custom domains turned out to be Substacks, and show-name → RSS feed mappings.
     // Persisted best-effort under the HJStore 'net_hints' key; losing it only costs speed.
     const SHOW_FEED_TTL = 7 * 24 * 3600 * 1000;
+    const PROXY_DEAD_TTL = 7 * 24 * 3600 * 1000;
     const netHints = {
       data: null,
       load() {
@@ -2561,6 +2562,7 @@
           this.data.proxyByHost = this.data.proxyByHost || {};
           this.data.substackHosts = this.data.substackHosts || ['latent.space', 'astralcodexten.com'];
           this.data.feedByShow = this.data.feedByShow || {};
+          this.data.proxyDeadHosts = this.data.proxyDeadHosts || {};
         }
         return this.data;
       },
@@ -2573,6 +2575,30 @@
         d.proxyByHost[host] = name;
         const keys = Object.keys(d.proxyByHost);
         if (keys.length > 50) delete d.proxyByHost[keys[0]];
+        this.save();
+      },
+      // Hosts whose CORS-proxy chain produced no article last time. Remembering
+      // this is what stops a second visit to the same publisher paying the chain's
+      // full ~15s to lose all over again: the routes that did work start up front
+      // instead. Same treatment BOT_WALLED_HOSTS gets, learned rather than
+      // hardcoded, and re-tested after a week in case the block was temporary.
+      isProxyDeadHost(host) {
+        const ts = this.load().proxyDeadHosts[host];
+        return !!ts && Date.now() - ts < PROXY_DEAD_TTL;
+      },
+      recordProxyDead(host) {
+        if (!host) return;
+        const d = this.load();
+        d.proxyDeadHosts[host] = Date.now();
+        const keys = Object.keys(d.proxyDeadHosts);
+        if (keys.length > 50) delete d.proxyDeadHosts[keys[0]];
+        this.save();
+      },
+      clearProxyDead(host) {
+        if (!host) return;
+        const d = this.load();
+        if (!(host in d.proxyDeadHosts)) return;
+        delete d.proxyDeadHosts[host];
         this.save();
       },
       isSubstackHost(host) { return this.load().substackHosts.includes(host); },
@@ -3067,6 +3093,46 @@
       const sample = text.slice(0, 4000);
       if (BLOCKED_PAGE_HARD.some(re => re.test(sample))) return true;
       return text.length < 1500 && BLOCKED_PAGE_SOFT.some(re => re.test(sample));
+    };
+
+    // A short post is not a truncated one. The thin-article gate below exists to
+    // catch paywall stubs and consent shells, but plenty of publishers — company
+    // newsrooms especially — post announcements that are genuinely 400-900 chars
+    // long. Those used to be indistinguishable from a stub, so a correctly
+    // extracted short article still paid for every fallback tier, and since no
+    // tier could ever return more than the article actually contains, the walk
+    // never short-circuited: it awaited all five, Jina's 25s included.
+    //
+    // What separates the two is not length but shape. A stub is cut off mid-story
+    // and says so — "continue reading", "subscribe to read", an ellipsis where the
+    // text stops. A complete short post ends on a full stop and reads as several
+    // finished sentences.
+    const TRUNCATION_MARKERS = [
+      /continue reading/i,
+      /read (?:the )?(?:full|rest|more)\b/i,
+      /subscribe to (?:read|continue|keep reading)/i,
+      /sign (?:in|up) to (?:read|continue)/i,
+      /(?:this (?:article|content|story) is (?:for|available to) subscribers)/i,
+      /already a (?:subscriber|member)\?/i,
+      /become a (?:subscriber|member)/i,
+      /create (?:a )?(?:free )?account to/i,
+      /support (?:our|independent) journalism/i,
+      /accept (?:all )?cookies/i,
+      /we use cookies/i,
+      /enable javascript/i,
+    ];
+    const MIN_COMPLETE_ARTICLE_CHARS = 400;
+    const looksCompleteArticle = (text) => {
+      if (!text) return false;
+      const t = text.trim();
+      if (t.length < MIN_COMPLETE_ARTICLE_CHARS) return false;
+      // Cut off mid-sentence, or trailing into an ellipsis: a stub.
+      if (!/[.!?]["\u2019\u201d')\]]?$/.test(t)) return false;
+      if (/(?:\u2026|\.\.\.)\s*$/.test(t)) return false;
+      // Enough finished sentences to be a post rather than a standfirst.
+      const sentences = (t.match(/[.!?]["\u2019\u201d')\]]?(?:\s|$)/g) || []).length;
+      if (sentences < 4) return false;
+      return !TRUNCATION_MARKERS.some(re => re.test(t));
     };
 
     // Publishers whose WAF reliably serves a challenge page to datacenter IPs.
@@ -3724,7 +3790,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.49.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.50.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5548,9 +5614,15 @@
           // was served a challenge page for. It sends no CORS headers of its own,
           // so it has to go through the proxy chain; the proxies are only blocked
           // by the *publisher's* WAF, not by archive.today.
+          //
+          // archive.ph and archive.is are two front doors onto the same archive, so
+          // whichever answers first is the same snapshot. They used to be tried one
+          // after the other, which meant a dead first mirror cost a full proxy chain
+          // (~15s) before the second one even started; raced with a short stagger,
+          // the tier costs about what one mirror costs.
           const tryArchiveToday = async () => {
             const target = url.startsWith('http') ? url : 'https://' + url;
-            for (const host of ['archive.ph', 'archive.is']) {
+            return await raceStaggered(['archive.ph', 'archive.is'].map((host) => async () => {
               try {
                 console.log(`Trying ${host}...`);
                 const html = await fetchHtmlViaProxies(`https://${host}/newest/${target}`);
@@ -5562,8 +5634,8 @@
               } catch (e) {
                 console.log(`[HJ:article] ${host} failed:`, e?.message || e);
               }
-            }
-            return null;
+              return null;
+            }), { staggerMs: 1500 });
           };
 
           // Strategy 0 (X.com): posts and Articles from x.com / twitter.com.
@@ -5957,10 +6029,17 @@
           // through now so their latency overlaps the doomed chain rather than
           // stacking on top of it. Tier-1 still runs: if a proxy does slip past
           // the wall, its extraction is the best copy of the article we can get.
-          const botWalled = isBotWalledHost(url);
-          const earlyWaybackP = botWalled ? fetchWayback() : null;
-          const earlyArchiveP = botWalled ? tryArchiveToday().catch(() => null) : null;
-          const earlyJinaP = botWalled ? tryJinaReader(url).catch(() => null) : null;
+          //
+          // BOT_WALLED_HOSTS is the hardcoded half of this; the other half is
+          // learned. Any host whose chain came back with nothing last time gets
+          // the same head start, so a publisher only costs the full chain once.
+          const articleHost = safeHostname(url).replace(/^www\./, '');
+          const proxyDead = netHints.isProxyDeadHost(articleHost);
+          const preloadFallbacks = isBotWalledHost(url) || proxyDead;
+          if (proxyDead) console.log('[HJ:article] proxy chain failed here before — starting fallbacks up front', articleHost);
+          const earlyWaybackP = preloadFallbacks ? fetchWayback().catch(() => null) : null;
+          const earlyArchiveP = preloadFallbacks ? tryArchiveToday().catch(() => null) : null;
+          const earlyJinaP = preloadFallbacks ? tryJinaReader(url).catch(() => null) : null;
 
           let html = await fetchHtmlViaProxies(url);
 
@@ -5985,6 +6064,13 @@
 
           let extracted = tryExtractArticle(html);
 
+          // Remember whether the chain was worth walking, so the next article from
+          // this publisher starts the working routes immediately instead of
+          // rediscovering the block. Recorded on a clean miss only — a thin result
+          // means a proxy did answer, so the chain is alive and worth trying again.
+          if (extracted) netHints.clearProxyDead(articleHost);
+          else netHints.recordProxyDead(articleHost);
+
           // Anything this short is a paywall stub, a consent shell, or a page
           // whose real body never survived the proxy. Tier-1 used to bank those
           // on a 100-character gate, which meant the fallbacks below never ran.
@@ -5992,13 +6078,28 @@
           // looking for something better.
           const THIN_ARTICLE_CHARS = 900;
 
+          // … unless it is simply a short post. A company newsroom announcement
+          // can be a complete 600-character story, and running the fallbacks for it
+          // was pure waste: no tier can return more text than the article contains,
+          // so nothing ever cleared the threshold and the walk below awaited every
+          // tier to the end — Jina's 25s included — before settling for the tier-1
+          // text it already had. looksCompleteArticle checks shape rather than
+          // length, so a finished short post is banked immediately and only genuine
+          // stubs (cut off mid-sentence, or asking you to subscribe) go looking.
+          const thinButComplete = !!extracted &&
+            extracted.text.length < THIN_ARTICLE_CHARS &&
+            looksCompleteArticle(extracted.text);
+          if (thinButComplete) {
+            console.log(`[HJ:article] short but complete (${extracted.text.length} chars) — skipping fallbacks`);
+          }
+
           // Strategies 2–5, run concurrently once tier-1 extraction fails or comes
           // back thin, but awaited in the original preference order (Wayback > AMP >
           // WordPress > Jina) so the result matches the old serial chain — only the
           // wall time changes (max of the tiers instead of their sum). Jina is
           // deliberately NOT started before this point: its keyless tier is
           // rate-limited, and the proxies handle most articles without it.
-          if (!extracted || extracted.text.length < THIN_ARTICLE_CHARS) {
+          if (!thinButComplete && (!extracted || extracted.text.length < THIN_ARTICLE_CHARS)) {
             showToast('Trying fallback sources...');
 
             // Strategy 2: Wayback Machine (archive.org has CORS headers, no proxy needed)
@@ -6057,8 +6158,25 @@
               [wpP, 'WordPress REST API'],
               [jinaP, 'Jina reader'],
             ];
+
+            // Once we hold *some* article the rest of the walk is a hunt for a
+            // better one, and it is not worth the sum of the remaining tiers'
+            // timeouts — a tier that has not answered within the grace window is
+            // one nobody is waiting on. With nothing in hand there is no such
+            // trade: keep waiting, because the alternative is a manual paste.
+            const FALLBACK_GRACE_MS = 8000;
+            const GRACE = Symbol('grace');
+            let graceP = null;
             for (const [tierPromise, label] of fallbackTiers) {
-              if (consider(await tierPromise, label)) break;
+              if (best && !graceP) {
+                graceP = new Promise(r => setTimeout(() => r(GRACE), FALLBACK_GRACE_MS));
+              }
+              const result = graceP ? await Promise.race([tierPromise, graceP]) : await tierPromise;
+              if (result === GRACE) {
+                console.log(`[HJ:article] fallback grace window elapsed at "${label}" — keeping best result so far (${best.text.length} chars)`);
+                break;
+              }
+              if (consider(result, label)) break;
             }
             extracted = best;
           }
@@ -6071,7 +6189,7 @@
             // "Could not extract" reads like a parser bug. On a walled publisher
             // nothing was ever fetched to parse, and pasting really is the only
             // way through — say so rather than implying the app mis-read the page.
-            showToast(botWalled
+            showToast(preloadFallbacks
               ? `${safeHostname(url)} blocked every fetch route — paste the article text below.`
               : 'Could not extract enough content. Try pasting manually.');
             setShowManualInput(true);
