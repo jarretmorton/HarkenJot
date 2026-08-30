@@ -222,7 +222,7 @@ the user actually used last.
 | `media_positions` | `harkenjot_media_positions` | Playback positions in media |
 | `session` | `harkenjot_session` | Last active tab/source (timestamped) for restore-on-reload |
 | `voice_uri` | `harkenjot_voice_uri` | Global TTS voice preference (voiceURI string) |
-| `net_hints` | `harkenjot_net_hints` | Network routing memory: last-working CORS proxy per host, learned custom-domain Substack hosts, show-name → RSS feed map (7-day TTL) |
+| `net_hints` | `harkenjot_net_hints` | Network routing memory: last-working CORS proxy per host, hosts whose proxy chain returned no article (7-day TTL), learned custom-domain Substack hosts, show-name → RSS feed map (7-day TTL) |
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
 
 ### Speech Recognition
@@ -401,6 +401,29 @@ Hosts in `BOT_WALLED_HOSTS` (currently `forbes.com`) start Wayback,
 archive.today and Jina *before* the proxy chain rather than after it. The chain
 still runs — a proxy that slips past the wall yields the best copy of the
 article — but its latency no longer stacks on top of the routes that work.
+That list is the hardcoded half; the other half is **learned**. When the chain
+returns no article for a host, `netHints.recordProxyDead()` remembers it, and
+the next article from that publisher gets the same head start instead of paying
+the chain's ~15 s to lose again. A later tier-1 success clears the hint, and it
+expires after a week regardless, so a temporary block doesn't stick.
+
+**A short post is not a truncated one.** `THIN_ARTICLE_CHARS` exists to catch
+paywall stubs, but company newsrooms routinely publish complete 400–900 char
+announcements. Those used to pay for every fallback tier — and because no tier
+can return more text than the article contains, nothing ever cleared the
+threshold, so the walk awaited *all five* (Jina's 25 s included) before settling
+for the tier-1 text it already had. `looksCompleteArticle()` judges shape rather
+than length: at least 400 chars, four finished sentences, ending on terminal
+punctuation, and no truncation/paywall marker (`TRUNCATION_MARKERS`). A post
+that passes is banked immediately and skips the fallbacks entirely.
+
+Once *any* result is in hand the rest of the walk is a hunt for a better one, so
+it runs under an 8 s grace window rather than the sum of the remaining tiers'
+timeouts. With nothing in hand there is no grace — the alternative to waiting is
+a manual paste, so the walk runs to the end. `tryArchiveToday` races `archive.ph`
+and `archive.is` through `raceStaggered` (both are front doors onto the same
+archive) instead of trying them serially, where a dead first mirror cost a whole
+proxy chain before the second one started.
 
 **Page furniture is not the article.** Jina returns the whole rendered page as
 markdown, and an archive capture carries the publisher's masthead (plus, without
