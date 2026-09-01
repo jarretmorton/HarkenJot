@@ -1329,6 +1329,26 @@
       height: 8px;
     }
 
+    .volume-readout.car-mode {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      text-align: right;
+    }
+
+    .volume-readout.car-mode label {
+      font-size: 0.7rem;
+      margin: 0;
+      line-height: 1;
+      color: var(--text-muted);
+    }
+
+    .volume-readout.car-mode span {
+      font-size: 0.8125rem;
+      line-height: 1;
+    }
+
     .speed-control.car-mode {
       flex-shrink: 0;
       display: flex;
@@ -2400,6 +2420,8 @@
       Rewind: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 19l-9-7 9-7v14z"/><path d="M22 19l-9-7 9-7v14z"/></svg>,
       FastForward: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 19l9-7-9-7v14z"/><path d="M2 19l9-7-9-7v14z"/></svg>,
       Search: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>,
+      VolumeUp: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>,
+      VolumeDown: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>,
       Car: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 17h2c.6 0 1-.4 1-1v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.24a2 2 0 0 0-1.8 1.1l-.8 1.63A6 6 0 0 0 2 12.42V16h2"/><circle cx="6.5" cy="16.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>,
       BookOpen: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
       Library: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>,
@@ -2713,10 +2735,20 @@
 
     // Speak a one-off utterance using the shared TTS voice selection. Resolves on end/error and
     // via a length-based safety timer, so callers' resume logic can never hang on a stuck utterance.
-    const speakText = (text, voiceURI, rate = 1) => new Promise((resolve) => {
+    // Volume is stepped rather than dragged: these are car-mode controls, meant to
+    // be hit without looking. Rounding each step keeps repeated presses from drifting
+    // off the 0.1 grid through float accumulation.
+    const VOLUME_STEP = 0.1;
+    const stepVolume = (setVolume, delta) => setVolume(v => {
+      const next = Math.min(1, Math.max(0, (typeof v === 'number' ? v : 1) + delta));
+      return Math.round(next * 100) / 100;
+    });
+
+    const speakText = (text, voiceURI, rate = 1, volume = 1) => new Promise((resolve) => {
       if (!text || !('speechSynthesis' in window)) { resolve(); return; }
       const u = new SpeechSynthesisUtterance(text);
       u.rate = rate;
+      u.volume = volume;
       const voices = window.speechSynthesis.getVoices();
       const chosen = (voiceURI && voices.find(v => v.voiceURI === voiceURI)) || getBestVoice();
       if (chosen) u.voice = chosen;
@@ -2801,7 +2833,7 @@
       _dbName: 'harkenjot',
       _store: 'kv',
       _handleStore: 'audioHandles',
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'net_hints', 'feed_cache'],
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
@@ -2809,6 +2841,7 @@
         media_positions: 'harkenjot_media_positions',
         session: 'harkenjot_session',
         voice_uri: 'harkenjot_voice_uri',
+        volume: 'harkenjot_volume',
         net_hints: 'harkenjot_net_hints',
         feed_cache: 'harkenjot_feed_cache',
       },
@@ -3305,7 +3338,7 @@
       },
 
       // Set action handlers
-      setActionHandlers: ({ onPlay, onPause, onSeekBackward, onSeekForward, onPreviousTrack, onNextTrack }) => {
+      setActionHandlers: ({ onPlay, onPause, onSeekBackward, onSeekForward, onPreviousTrack, onNextTrack, onSeekTo, onStop }) => {
         if (!('mediaSession' in navigator)) return;
 
         const handlers = [
@@ -3314,7 +3347,9 @@
           ['seekbackward', onSeekBackward],
           ['seekforward', onSeekForward],
           ['previoustrack', onPreviousTrack],
-          ['nexttrack', onNextTrack]
+          ['nexttrack', onNextTrack],
+          ['seekto', onSeekTo],
+          ['stop', onStop]
         ];
 
         handlers.forEach(([action, handler]) => {
@@ -3330,7 +3365,7 @@
       clearHandlers: () => {
         if (!('mediaSession' in navigator)) return;
 
-        const actions = ['play', 'pause', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack'];
+        const actions = ['play', 'pause', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack', 'seekto', 'stop'];
         actions.forEach(action => {
           try {
             navigator.mediaSession.setActionHandler(action, null);
@@ -3377,6 +3412,17 @@
       // Global TTS voice preference (voiceURI string) — applies across all sources.
       // null means "auto" (use getBestVoice). Stored separately from per-source speed.
       const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => HJStore.get('voice_uri') || null);
+
+      // Global playback volume (0-1), applied to every playback path: podcast
+      // <audio>, X <video>, the YouTube player, and TTS utterances. This is a
+      // multiplier *on top of* the device media volume — it can attenuate below the
+      // phone's current media volume but never exceed it. It exists because Android
+      // Auto binds its volume knob to the media app it has selected, and a browser
+      // tab can never be one, so the car's own knob cannot reach this app.
+      const [volume, setVolume] = useState(() => {
+        const saved = HJStore.get('volume');
+        return typeof saved === 'number' && isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
+      });
       const [toast, setToast] = useState({ show: false, message: '' });
       const [sidebarOpen, setSidebarOpen] = useState(false);
       const [undoData, setUndoData] = useState(null);
@@ -3447,6 +3493,10 @@
       useEffect(() => {
         HJStore.set('voice_uri', selectedVoiceURI).catch((e) => console.error('Failed to save voice preference:', e));
       }, [selectedVoiceURI]);
+
+      useEffect(() => {
+        HJStore.set('volume', volume).catch((e) => console.error('Failed to save volume:', e));
+      }, [volume]);
 
       // Mirror of the nav state for the visibility/pagehide handlers below.
       // lastSeenTsRef is when the user last actually had THIS tab on screen
@@ -3790,7 +3840,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.50.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.51.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -3862,6 +3912,8 @@
                   checkDuplicateBeforeLoad={checkDuplicateBeforeLoad}
                   selectedVoiceURI={selectedVoiceURI}
                   setSelectedVoiceURI={setSelectedVoiceURI}
+                  volume={volume}
+                  setVolume={setVolume}
                 />
               </div>
               <div style={{ display: activeTab === 'media' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -3884,6 +3936,8 @@
                   setPendingNotebookLMModal={setPendingNotebookLMModal}
                   checkDuplicateBeforeLoad={checkDuplicateBeforeLoad}
                   selectedVoiceURI={selectedVoiceURI}
+                  volume={volume}
+                  setVolume={setVolume}
                 />
               </div>
               <div style={{ display: activeTab === 'library' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -4544,7 +4598,7 @@
     };
 
     // Reader View Component
-    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, selectedVoiceURI, setSelectedVoiceURI }, ref) => {
+    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, selectedVoiceURI, setSelectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [loading, setLoading] = useState(false);
       const [content, setContent] = useState(null);
@@ -6317,6 +6371,7 @@
         setCurrentSentenceIndex(index);
         const utterance = new SpeechSynthesisUtterance(content.sentences[index]);
         utterance.rate = speed;
+        utterance.volume = volume;
 
         // User-selected voice wins; fall back to auto-pick if it's missing in this browser.
         const allVoices = window.speechSynthesis.getVoices();
@@ -6375,7 +6430,7 @@
           anchor._intentionalPause = false;
           anchor.play().catch(() => {});
         }
-      }, [content, speed, currentSource, updateSource, selectedVoiceURI]);
+      }, [content, speed, currentSource, updateSource, selectedVoiceURI, volume]);
 
       // Keep the ref updated with the latest speakFromIndex function
       useEffect(() => {
@@ -6396,6 +6451,20 @@
         }
         prevSpeedRef.current = speed;
       }, [speed, isPlaying, currentSentenceIndex]);
+
+      // Same for volume. utterance.volume is fixed when the utterance is built, so
+      // without this a change wouldn't be heard until the next sentence began.
+      const prevVolumeRef = useRef(volume);
+      useEffect(() => {
+        if (prevVolumeRef.current !== volume && isPlaying && speakFromIndexRef.current) {
+          wasCancelledRef.current = true;
+          window.speechSynthesis.cancel();
+          setTimeout(() => {
+            speakFromIndexRef.current(currentSentenceIndex);
+          }, 50);
+        }
+        prevVolumeRef.current = volume;
+      }, [volume, isPlaying, currentSentenceIndex]);
 
       // Speed changed by the user — persist it on the source, including a change
       // back to 1x. An effect keyed on `speed` can't: ReaderView remounts per
@@ -6440,8 +6509,35 @@
               setIsPlaying(false);
               releaseWakeLock();
             },
-            onSeekBackward: null,
-            onSeekForward: null,
+            // There is no timeline to seek in TTS, so map seek to sentence steps.
+            // Ref-based like the handlers above: this effect doesn't re-run per
+            // sentence, so a closure over currentSentenceIndex would go stale.
+            onSeekBackward: () => {
+              const idx = currentSentenceIndexRef.current;
+              if (idx <= 0) return;
+              wasCancelledRef.current = true;
+              window.speechSynthesis.cancel();
+              setCurrentSentenceIndex(idx - 1);
+              if (isPlayingRef.current && speakFromIndexRef.current) {
+                setTimeout(() => speakFromIndexRef.current(idx - 1), 50);
+              }
+            },
+            onSeekForward: () => {
+              const idx = currentSentenceIndexRef.current;
+              if (idx >= sentencesRef.current.length - 1) return;
+              wasCancelledRef.current = true;
+              window.speechSynthesis.cancel();
+              setCurrentSentenceIndex(idx + 1);
+              if (isPlayingRef.current && speakFromIndexRef.current) {
+                setTimeout(() => speakFromIndexRef.current(idx + 1), 50);
+              }
+            },
+            onStop: () => {
+              wasCancelledRef.current = true;
+              window.speechSynthesis.cancel();
+              setIsPlaying(false);
+              releaseWakeLock();
+            },
             onPreviousTrack: null,
             onNextTrack: null
           });
@@ -6458,7 +6554,12 @@
         return () => {
           MediaSessionManager.clearHandlers();
         };
-      }, [content, currentSource]);
+        // Depend on the specific fields read above, not the whole currentSource.
+        // updateSource() rebuilds that object by spread on every source mutation, so
+        // depending on its identity re-ran this effect constantly — and each re-run
+        // calls clearHandlers() first, briefly publishing a media session with no
+        // transport actions at all.
+      }, [content, currentSource?.id, currentSource?.title, currentSource?.siteName, currentSource?.type]);
 
       // Manage silent audio for TTS media session.
       // Mirrors how podcast <audio> works: the browser derives the play/pause
@@ -6590,7 +6691,7 @@
         });
         playSound(result ? 'success' : 'error');
         wasCancelledRef.current = false;
-        await speakText(answerText, selectedVoiceURI, speed);
+        await speakText(answerText, selectedVoiceURI, speed, volume);
         // startRecording sets wasCancelledRef true if a new recording cancelled the answer
         // mid-speech — in that case don't resume reading underneath the new recording.
         if (wasPlaying && !wasCancelledRef.current && speakFromIndexRef.current) {
@@ -7215,6 +7316,12 @@
                     </div>
 
                     <div className={`speed-voice-row ${carMode ? 'car-mode' : ''}`}>
+                      {carMode && (
+                        <div className="volume-readout car-mode">
+                          <label>Volume</label>
+                          <span>{Math.round(volume * 100)}%</span>
+                        </div>
+                      )}
                       <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                         <label>Speed</label>
                         <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
@@ -7250,37 +7357,82 @@
                 </div>
 
                 <div className="note-controls">
-                  <button
-                    className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
-                    onClick={handleVoiceButtonClick}
-                    disabled={!speechReady || whisperLoading}
-                    title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
-                  >
-                    {isRecording ? '⏹ Stop' :
-                     whisperLoading ? `Loading ${whisperProgress}%` :
-                     isTranscribing ? 'Processing...' :
-                     <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    onClick={openTextNote}
-                  >
-                    <Icons.Keyboard /> Type
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    onClick={() => setShowSearch(!showSearch)}
-                  >
-                    <Icons.Search /> Search
-                  </button>
-                  {isMobileDevice && (
-                    <button
-                      className={`note-btn ${carMode ? 'car-mode active' : ''}`}
-                      onClick={() => setCarMode(!carMode)}
-                      title="Car Mode"
-                    >
-                      <Icons.Car />
-                    </button>
+                  {carMode ? (
+                    <>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, VOLUME_STEP)}
+                        disabled={volume >= 1}
+                        style={volume >= 1 ? { opacity: 0.5 } : undefined}
+                        title="Volume up"
+                      >
+                        <Icons.VolumeUp /> Volume Up
+                      </button>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, -VOLUME_STEP)}
+                        disabled={volume <= 0}
+                        style={volume <= 0 ? { opacity: 0.5 } : undefined}
+                        title="Volume down"
+                      >
+                        <Icons.VolumeDown /> Volume Down
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        onClick={openTextNote}
+                      >
+                        <Icons.Keyboard /> Type
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        onClick={() => setShowSearch(!showSearch)}
+                      >
+                        <Icons.Search /> Search
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -7304,7 +7456,7 @@
     });
 
     // Media View Component
-    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, selectedVoiceURI }, ref) => {
+    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, selectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [isPlaying, setIsPlaying] = useState(false);
       const [currentTime, setCurrentTime] = useState(0);
@@ -7346,6 +7498,10 @@
       // The YouTube player is built asynchronously (iframe API readiness + a
       // setTimeout), so its onReady closure would otherwise see a stale speed.
       const speedRef = useRef(1);
+      // Seeded from the prop: unlike speed (which hydrates from the source later),
+      // the saved volume is already known at mount, and YouTube's onReady reads this
+      // ref and can fire before the volume effect has run.
+      const volumeRef = useRef(volume);
       const audioPlayerRef = useRef(null); // HTML5 audio element for podcasts
       const videoPlayerRef = useRef(null); // HTML5 video element for X.com tweet videos
       const activeBlobUrlsRef = useRef(new Set()); // Blob URLs created this session (valid for re-link detection)
@@ -7549,6 +7705,24 @@
         }
       }, [speed]);
 
+      // Apply volume to every player. Mirrors the speed fanout above: plain
+      // element.volume assignments, never a Web Audio GainNode — routing a media
+      // element through createMediaElementSource would change the output path that
+      // this app's audio-focus behaviour is tuned around.
+      useEffect(() => {
+        volumeRef.current = volume;
+        if (playerRef.current && playerRef.current.setVolume) {
+          // YouTube's player takes 0-100, not 0-1.
+          playerRef.current.setVolume(Math.round(volume * 100));
+        }
+        if (audioPlayerRef.current) {
+          audioPlayerRef.current.volume = volume;
+        }
+        if (videoPlayerRef.current) {
+          videoPlayerRef.current.volume = volume;
+        }
+      }, [volume]);
+
       // Speed changed by the user — from our dropdown or YouTube's own speed menu.
       // Persist it (including a change back to 1x, which an effect keyed on `speed`
       // couldn't do: MediaView remounts per source, so it starts at 1 every time
@@ -7591,8 +7765,26 @@
           MediaSessionManager.setActionHandlers({
             onPlay: () => audioPlayerRef.current?.play(),
             onPause: () => audioPlayerRef.current?.pause(),
-            onSeekBackward: null,
-            onSeekForward: null,
+            // Same 15s as the on-screen transport buttons, so the car and the app
+            // agree on what a skip means.
+            onSeekBackward: (details) => {
+              const el = audioPlayerRef.current;
+              if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
+            },
+            onSeekForward: (details) => {
+              const el = audioPlayerRef.current;
+              if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
+            },
+            onSeekTo: (details) => {
+              const el = audioPlayerRef.current;
+              if (!el || details?.seekTime == null) return;
+              if (details.fastSeek && el.fastSeek) el.fastSeek(details.seekTime);
+              else el.currentTime = details.seekTime;
+            },
+            onStop: () => {
+              const el = audioPlayerRef.current;
+              if (el) { el.pause(); el.currentTime = 0; }
+            },
             onPreviousTrack: null,
             onNextTrack: null
           });
@@ -7609,8 +7801,22 @@
           MediaSessionManager.setActionHandlers({
             onPlay: () => playerRef.current?.playVideo(),
             onPause: () => playerRef.current?.pauseVideo(),
-            onSeekBackward: null,
-            onSeekForward: null,
+            onSeekBackward: (details) => {
+              const pl = playerRef.current;
+              if (pl?.seekTo) pl.seekTo(Math.max(0, pl.getCurrentTime() - (details?.seekOffset || 15)), true);
+            },
+            onSeekForward: (details) => {
+              const pl = playerRef.current;
+              if (pl?.seekTo) pl.seekTo(pl.getCurrentTime() + (details?.seekOffset || 15), true);
+            },
+            onSeekTo: (details) => {
+              const pl = playerRef.current;
+              if (pl?.seekTo && details?.seekTime != null) pl.seekTo(details.seekTime, true);
+            },
+            onStop: () => {
+              const pl = playerRef.current;
+              if (pl?.pauseVideo) { pl.pauseVideo(); if (pl.seekTo) pl.seekTo(0, true); }
+            },
             onPreviousTrack: null,
             onNextTrack: null
           });
@@ -7634,8 +7840,26 @@
               if (videoPlayerRef.current) videoPlayerRef.current.pause();
               else { setIsPlaying(false); releaseWakeLock(); }
             },
-            onSeekBackward: null,
-            onSeekForward: null,
+            // Only the MP4 path is seekable; the iframe embed offers no handle.
+            onSeekBackward: (details) => {
+              const el = videoPlayerRef.current;
+              if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
+            },
+            onSeekForward: (details) => {
+              const el = videoPlayerRef.current;
+              if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
+            },
+            onSeekTo: (details) => {
+              const el = videoPlayerRef.current;
+              if (!el || details?.seekTime == null) return;
+              if (details.fastSeek && el.fastSeek) el.fastSeek(details.seekTime);
+              else el.currentTime = details.seekTime;
+            },
+            onStop: () => {
+              const el = videoPlayerRef.current;
+              if (el) { el.pause(); el.currentTime = 0; }
+              else { setIsPlaying(false); releaseWakeLock(); }
+            },
             onPreviousTrack: null,
             onNextTrack: null
           });
@@ -7652,7 +7876,9 @@
         return () => {
           MediaSessionManager.clearHandlers();
         };
-      }, [podcastAudio, videoId, xVideo, currentSource]);
+        // Specific fields, not the whole object — see the note in ReaderView's
+        // equivalent effect: currentSource's identity changes on every mutation.
+      }, [podcastAudio, videoId, xVideo, currentSource?.id, currentSource?.title, currentSource?.thumbnail, currentSource?.channelName]);
 
       // Update Media Session playback state when playing status changes
       useEffect(() => {
@@ -7672,7 +7898,10 @@
           const silentAudio = MediaSessionManager.initSilentAudio();
           silentAudio.play().catch(err => console.log('Silent audio play error:', err));
         } else if (MediaSessionManager.silentAudio) {
-          MediaSessionManager.silentAudio.pause();
+          // Must go through stopSilentAudio(): a bare pause() is undone 50 ms later
+          // by the anchor's own auto-recover listener, leaving it looping — and
+          // flapping play/pause — for the rest of the session.
+          MediaSessionManager.stopSilentAudio();
         }
       }, [isPlaying, videoId, xVideo]);
 
@@ -9465,6 +9694,11 @@
               if (speedRef.current !== 1) {
                 event.target.setPlaybackRate(speedRef.current);
               }
+              // Same for volume: the player is created after the saved volume is
+              // read, so the volume effect had nothing to apply to yet.
+              if (event.target.setVolume) {
+                event.target.setVolume(Math.round(volumeRef.current * 100));
+              }
             },
             onPlaybackRateChange: (event) => {
               // Fires for YouTube's own speed menu as well as our setPlaybackRate
@@ -9482,6 +9716,10 @@
                 // YouTube resets the rate to 1x on some loads — re-assert ours.
                 if (speedRef.current !== 1 && event.target.getPlaybackRate() !== speedRef.current) {
                   event.target.setPlaybackRate(speedRef.current);
+                }
+                // Same for volume, which YouTube also resets on some loads.
+                if (event.target.setVolume) {
+                  event.target.setVolume(Math.round(volumeRef.current * 100));
                 }
                 // Auto-mark in-progress when playback actually starts (not on open)
                 if (currentSource?.id && getReadStatus(currentSource) !== 'inProgress') {
@@ -9621,7 +9859,7 @@
         });
         playSound(result ? 'success' : 'error');
         askCancelledRef.current = false;
-        await speakText(answerText, selectedVoiceURI, 1);
+        await speakText(answerText, selectedVoiceURI, 1, volume);
         // Skip resume if a new recording started (and cancelled the answer) while it was speaking.
         if (wasPlaying && !askCancelledRef.current) {
           if (audioPlayerRef.current) { audioPlayerRef.current.play(); requestWakeLock(); }
@@ -10064,6 +10302,7 @@
                       const savedPosition = savedPositions[currentSource?.id];
                       if (savedPosition) e.target.currentTime = savedPosition;
                       if (speed && speed !== 1) e.target.playbackRate = speed;
+                      e.target.volume = volume;
                     }}
                     onTimeUpdate={(e) => setCurrentTime(e.target.currentTime)}
                     onPlay={() => { setIsPlaying(true); requestWakeLock(); if (currentSource?.id && getReadStatus(currentSource) !== 'inProgress') { updateSource(currentSource.id, { status: 'inProgress', isRead: false }); } }}
@@ -10140,43 +10379,94 @@
                         <span>{duration > 0 ? formatTime(duration) : '--:--'}</span>
                       </div>
                     </div>
+                    {carMode && (
+                      <div className="volume-readout car-mode">
+                        <label>Volume</label>
+                        <span>{Math.round(volume * 100)}%</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="note-controls">
-                  <button
-                    className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
-                    onClick={handleVoiceButtonClick}
-                    disabled={!speechReady || whisperLoading}
-                    title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
-                  >
-                    {isRecording ? '⏹ Stop' :
-                     whisperLoading ? `Loading ${whisperProgress}%` :
-                     isTranscribing ? 'Processing...' :
-                     <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    onClick={openTextNote}
-                  >
-                    <Icons.Keyboard /> Type
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    disabled={true}
-                    title="Search not available for X videos"
-                    style={{ opacity: 0.5 }}
-                  >
-                    <Icons.Search /> Search
-                  </button>
-                  {isMobileDevice && (
-                    <button
-                      className={`note-btn ${carMode ? 'car-mode active' : ''}`}
-                      onClick={() => setCarMode(!carMode)}
-                      title="Car Mode"
-                    >
-                      <Icons.Car />
-                    </button>
+                  {carMode ? (
+                    <>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, VOLUME_STEP)}
+                        disabled={volume >= 1}
+                        style={volume >= 1 ? { opacity: 0.5 } : undefined}
+                        title="Volume up"
+                      >
+                        <Icons.VolumeUp /> Volume Up
+                      </button>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, -VOLUME_STEP)}
+                        disabled={volume <= 0}
+                        style={volume <= 0 ? { opacity: 0.5 } : undefined}
+                        title="Volume down"
+                      >
+                        <Icons.VolumeDown /> Volume Down
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        onClick={openTextNote}
+                      >
+                        <Icons.Keyboard /> Type
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        disabled={true}
+                        title="Search not available for X videos"
+                        style={{ opacity: 0.5 }}
+                      >
+                        <Icons.Search /> Search
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -10268,6 +10558,12 @@
                       </div>
                     </div>
 
+                    {carMode && (
+                      <div className="volume-readout car-mode">
+                        <label>Volume</label>
+                        <span>{Math.round(volume * 100)}%</span>
+                      </div>
+                    )}
                     <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                       <label>Speed</label>
                       <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
@@ -10283,39 +10579,84 @@
                 </div>
 
                 <div className="note-controls">
-                  <button
-                    className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
-                    onClick={handleVoiceButtonClick}
-                    disabled={!speechReady || whisperLoading}
-                    title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
-                  >
-                    {isRecording ? '⏹ Stop' :
-                     whisperLoading ? `Loading ${whisperProgress}%` :
-                     isTranscribing ? 'Processing...' :
-                     <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    onClick={openTextNote}
-                  >
-                    <Icons.Keyboard /> Type
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    disabled={true}
-                    title="Search not available for YouTube"
-                    style={{ opacity: 0.5 }}
-                  >
-                    <Icons.Search /> Search
-                  </button>
-                  {isMobileDevice && (
-                    <button
-                      className={`note-btn ${carMode ? 'car-mode active' : ''}`}
-                      onClick={() => setCarMode(!carMode)}
-                      title="Car Mode"
-                    >
-                      <Icons.Car />
-                    </button>
+                  {carMode ? (
+                    <>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, VOLUME_STEP)}
+                        disabled={volume >= 1}
+                        style={volume >= 1 ? { opacity: 0.5 } : undefined}
+                        title="Volume up"
+                      >
+                        <Icons.VolumeUp /> Volume Up
+                      </button>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, -VOLUME_STEP)}
+                        disabled={volume <= 0}
+                        style={volume <= 0 ? { opacity: 0.5 } : undefined}
+                        title="Volume down"
+                      >
+                        <Icons.VolumeDown /> Volume Down
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        onClick={openTextNote}
+                      >
+                        <Icons.Keyboard /> Type
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        disabled={true}
+                        title="Search not available for YouTube"
+                        style={{ opacity: 0.5 }}
+                      >
+                        <Icons.Search /> Search
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -10395,6 +10736,7 @@
                 onDurationChange={(e) => {
                   const dur = e.target.duration;
                   setDuration(dur);
+                  e.target.volume = volume;
                   // Update source with duration for Library display
                   if (currentSource?.id && dur && isFinite(dur)) {
                     updateSource(currentSource.id, { duration: dur });
@@ -10581,6 +10923,12 @@
                       </div>
                     </div>
 
+                    {carMode && (
+                      <div className="volume-readout car-mode">
+                        <label>Volume</label>
+                        <span>{Math.round(volume * 100)}%</span>
+                      </div>
+                    )}
                     <div className={`speed-control ${carMode ? 'car-mode' : ''}`}>
                       <label>Speed</label>
                       <select value={speed} onChange={(e) => changeSpeed(parseFloat(e.target.value))}>
@@ -10596,39 +10944,84 @@
                 </div>
 
                 <div className="note-controls">
-                  <button
-                    className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
-                    onClick={handleVoiceButtonClick}
-                    disabled={!speechReady || whisperLoading}
-                    title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
-                  >
-                    {isRecording ? '⏹ Stop' :
-                     whisperLoading ? `Loading ${whisperProgress}%` :
-                     isTranscribing ? 'Processing...' :
-                     <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    onClick={openTextNote}
-                  >
-                    <Icons.Keyboard /> Type
-                  </button>
-                  <button
-                    className={`note-btn ${carMode ? 'car-mode' : ''}`}
-                    disabled={true}
-                    title="Search not available for podcasts"
-                    style={{ opacity: 0.5 }}
-                  >
-                    <Icons.Search /> Search
-                  </button>
-                  {isMobileDevice && (
-                    <button
-                      className={`note-btn ${carMode ? 'car-mode active' : ''}`}
-                      onClick={() => setCarMode(!carMode)}
-                      title="Car Mode"
-                    >
-                      <Icons.Car />
-                    </button>
+                  {carMode ? (
+                    <>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, VOLUME_STEP)}
+                        disabled={volume >= 1}
+                        style={volume >= 1 ? { opacity: 0.5 } : undefined}
+                        title="Volume up"
+                      >
+                        <Icons.VolumeUp /> Volume Up
+                      </button>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className="note-btn car-mode"
+                        onClick={() => stepVolume(setVolume, -VOLUME_STEP)}
+                        disabled={volume <= 0}
+                        style={volume <= 0 ? { opacity: 0.5 } : undefined}
+                        title="Volume down"
+                      >
+                        <Icons.VolumeDown /> Volume Down
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className={`note-btn ${isProcessing ? 'processing' : ''} ${carMode ? 'car-mode' : ''}`}
+                        onClick={handleVoiceButtonClick}
+                        disabled={!speechReady || whisperLoading}
+                        title={!speechReady ? 'Speech recognition not supported' : (useWhisperFallback ? 'Using offline mode' : '')}
+                      >
+                        {isRecording ? '⏹ Stop' :
+                         whisperLoading ? `Loading ${whisperProgress}%` :
+                         isTranscribing ? 'Processing...' :
+                         <><Icons.Mic /> Voice{useWhisperFallback ? ' (offline)' : ''}</>}
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        onClick={openTextNote}
+                      >
+                        <Icons.Keyboard /> Type
+                      </button>
+                      <button
+                        className={`note-btn ${carMode ? 'car-mode' : ''}`}
+                        disabled={true}
+                        title="Search not available for podcasts"
+                        style={{ opacity: 0.5 }}
+                      >
+                        <Icons.Search /> Search
+                      </button>
+                      {isMobileDevice && (
+                        <button
+                          className={`note-btn ${carMode ? 'car-mode active' : ''}`}
+                          onClick={() => setCarMode(!carMode)}
+                          title="Car Mode"
+                        >
+                          <Icons.Car />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
