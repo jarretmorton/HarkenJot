@@ -194,9 +194,12 @@ All state lives in the `App` component via `useState` hooks. There is no externa
 - `activeTab` — Current view (`reader`, `media`, `library`)
 - `currentSource` — The active source being consumed
 - `sidebarOpen` — Notes sidebar visibility
-- `carMode` — Simplified large-button UI mode
+- `carMode` — Simplified large-button UI mode. In car mode the 2x2 button grid is
+  **Volume Up / Voice / Volume Down / Car**; Type and Search are deliberately hidden
+  there (they need the keyboard and a steady eye) and return the moment you leave it
 - `restoredSession` — Last tab/source restored from the persisted `session` key on startup
 - `selectedVoiceURI` — Global TTS voice preference (`null` = auto-select best voice)
+- `volume` — Global playback volume, 0-1 (see **In-app volume** below)
 - `toast` / `undoData` — Toast notification state and pending undo payload
 - `isMobileDevice` — Mobile detection used to adapt UI affordances
 - `pendingNotebookLMModal` — Set when a local audio file is loaded so MediaView can show the NotebookLM modal
@@ -222,8 +225,43 @@ the user actually used last.
 | `media_positions` | `harkenjot_media_positions` | Playback positions in media |
 | `session` | `harkenjot_session` | Last active tab/source (timestamped) for restore-on-reload |
 | `voice_uri` | `harkenjot_voice_uri` | Global TTS voice preference (voiceURI string) |
+| `volume` | `harkenjot_volume` | Global playback volume (number, 0-1) |
 | `net_hints` | `harkenjot_net_hints` | Network routing memory: last-working CORS proxy per host, hosts whose proxy chain returned no article (7-day TTL), learned custom-domain Substack hosts, show-name → RSS feed map (7-day TTL) |
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
+
+### In-app volume
+
+`volume` (0-1, App state, persisted under the `volume` key) is applied to **all four**
+playback paths, each by its own mechanism — add any new path to all of them:
+
+| Path | Mechanism |
+|------|-----------|
+| Podcast / local audio | `audioPlayerRef.current.volume`, plus `onDurationChange` for initial load |
+| X.com video | `videoPlayerRef.current.volume`, plus `onLoadedMetadata` |
+| YouTube | `playerRef.current.setVolume(0-100)` — **not** 0-1; re-asserted in `onReady` and on
+  `PLAYING`, because YouTube resets it on some loads (same reason speed is re-asserted) |
+| Reader TTS | `utterance.volume`, plus a `prevVolumeRef` effect that restarts the current
+  sentence — `utterance.volume` is fixed at construction, so without it a change isn't
+  heard until the next sentence |
+
+**Never route a media element through Web Audio to do this.** A `GainNode` via
+`createMediaElementSource` would be the app's only element-to-Web-Audio routing and would
+change the output path that the audio-focus behaviour (and every comment around the
+media-session anchor) is tuned around. Plain `element.volume` is the non-disruptive option.
+
+`element.volume` is a **multiplier on top of the device media volume** — it can attenuate
+below the phone's current media volume but never exceed it. Set the phone's media volume
+high once, then trim in-app.
+
+**Why this exists — do not "fix" it by chasing the car's volume knob again.** On Android
+Auto the knob adjusts the media app Android Auto has *selected*, which must register a
+`MediaBrowserService` and appear in AA's app list. Chrome is not such an app and a browser
+tab can never become one, so the knob cannot reach this app no matter what the page does.
+This was confirmed on-device: the phone's own volume buttons control HarkenJot correctly on
+the "Media" stream for every source type (so audio focus and stream type are fine), the AA
+screen shows the last selected media app rather than HarkenJot, and turning the knob does
+not interrupt playback. Bluetooth A2DP was ruled out too — media audio is disabled on both
+ends, so the audio travels over the AA link. The in-app buttons are the fix that works.
 
 ### Speech Recognition
 
