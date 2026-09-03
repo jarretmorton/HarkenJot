@@ -2822,6 +2822,39 @@
       return { score, reason };
     };
 
+    // Score how closely a feed/iTunes episode title matches the title we are
+    // looking for. Shared by every episode chooser so they cannot drift.
+    // Returns { score, confident }:
+    //   100 — one title contains the other (ignoring punctuation and spacing)
+    //   10 per distinct significant word the candidate shares with the target
+    // `confident` is what callers must gate on before playing an episode: a
+    // single incidental word in common ("about", "agent", "openai") is not a
+    // match, and acting on one silently plays an unrelated episode.
+    const EPISODE_STOP_WORDS = new Set(['a','an','the','of','in','on','at','to','for','and','or','but','with','by','from','as','is','are','was','were','be','been','it','its','this','that','these','those','we','our','you','your','about','into','out','up','do','so','no','not','if','can','has','had','have','will','just','also','than','what','why','how','when','who','all','more','most','over','after','before','part','episode','podcast','ep','w','feat','featuring','vs','via']);
+    const normalizeEpisodeTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    const significantTitleWords = (normalized) =>
+      new Set(normalized.split(/\s+/).filter(w => w.length > 3 && !EPISODE_STOP_WORDS.has(w)));
+
+    const scoreEpisodeTitleMatch = (targetNorm, candidateNorm, targetWords) => {
+      if (!targetNorm || !candidateNorm) return { score: 0, confident: false };
+      const targetStripped = targetNorm.replace(/\s/g, '');
+      const candidateStripped = candidateNorm.replace(/\s/g, '');
+      if (candidateStripped.includes(targetStripped) || targetStripped.includes(candidateStripped)) {
+        return { score: 100, confident: true };
+      }
+      // Whole-word overlap on distinct significant words. A substring test here
+      // would let "face" match "surface" and a repeated word count twice.
+      const words = targetWords || significantTitleWords(targetNorm);
+      const candidateWords = new Set(candidateNorm.split(/\s+/));
+      let shared = 0;
+      for (const w of words) { if (candidateWords.has(w)) shared++; }
+      const score = shared * 10;
+      // Three significant words in common, or every one of them when the title
+      // is too short to have three — matches searchForRSSFeed's MIN_EPISODE_SCORE.
+      const needed = Math.min(3, words.size);
+      return { score, confident: needed > 0 && shared >= needed };
+    };
+
     // Persistent storage backed by IndexedDB. Replaces localStorage (~5 MB cap)
     // with a much larger quota. All callers expect a synchronous get(), so we
     // hydrate the entire keyspace into an in-memory cache during init() and
@@ -3840,7 +3873,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.51.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.51.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -8085,11 +8118,32 @@
           if (!response.ok) throw new Error('Failed to fetch Spotify metadata');
           const data = await response.json();
 
-          // Extract show name from title using common separators
-          // oEmbed title may be "Show Name - Episode Title", "Episode Title", or other formats
+          // Work out the show name. Spotify's oEmbed carries no show field, so
+          // what we can say depends entirely on what the URL points at:
+          //
+          //   /show/    — the title IS the show name. Certain.
+          //   /episode/ — the title is *only* the episode name. Splitting it on
+          //               a dash is what broke every "Guest – Topic" podcast:
+          //               "Ajeya Cotra – Inside the OpenAI agent swarm…" yielded
+          //               a show name of "Ajeya Cotra", and because that read as
+          //               certain it also suppressed the page scrape that would
+          //               have returned the real show. iTunes was then searched
+          //               for a podcast named after the guest, and whatever came
+          //               back played the wrong episode. So: show unknown, and
+          //               say so — the caller scrapes the page for the real name.
+          //
+          // Only a URL shape we don't recognise still gets the old separator guess.
+          const resourceType = getSpotifyResourceType(cleanUrl);
           let showName = data.title;
           let separatorFound = false;
-          if (data.provider_name === 'Spotify') {
+          if (data.provider_name !== 'Spotify') {
+            showName = data.provider_name;
+            separatorFound = true;
+          } else if (resourceType === 'show') {
+            separatorFound = true;
+          } else if (resourceType === 'episode') {
+            showName = null;
+          } else {
             const separators = [' - ', ' — ', ' – ', ' | '];
             for (const sep of separators) {
               if (data.title.includes(sep)) {
@@ -8098,17 +8152,15 @@
                 break;
               }
             }
-          } else {
-            showName = data.provider_name;
-            separatorFound = true;
           }
 
           const result = {
             title: data.title,
             showName: showName,
             thumbnailUrl: data.thumbnail_url,
-            // Flag callers that the show name is just the episode title (no
-            // separator), so they can attempt a more reliable lookup.
+            // Flag callers that we have no trustworthy show name (an episode
+            // URL, or a shape we could only guess at), so they can attempt a
+            // more reliable lookup via the page scrape / iTunes episode search.
             showNameUncertain: !separatorFound
           };
           console.log('[HJ:podcast] oEmbed →', { title: result.title, showName: result.showName, uncertain: result.showNameUncertain });
@@ -8369,48 +8421,47 @@
               if (episodeResponse.ok) {
                 const episodeData = await episodeResponse.json();
                 if (episodeData.results && episodeData.results.length > 0) {
-                  const targetNorm = normalizeForMatch(episodeTitle);
+                  const targetNorm = normalizeEpisodeTitle(episodeTitle);
+                  const targetWords = significantTitleWords(targetNorm);
                   let bestResult = null;
                   let bestScore = -1;
+                  let bestConfident = false;
+                  let bestTitleScore = 0;
 
                   for (const result of episodeData.results) {
                     if (!result.feedUrl) continue;
-                    const resultNorm = normalizeForMatch(result.trackName || '');
                     const collectionNorm = normalizeForMatch(result.collectionName || '');
-                    let score = 0;
-                    if (resultNorm === targetNorm) score = 100;
-                    else if (resultNorm.includes(targetNorm) || targetNorm.includes(resultNorm)) score = 80;
-                    else {
-                      const targetWords = targetNorm.split(/\s+/).filter(w => w.length > 3);
-                      targetWords.forEach(word => {
-                        if (resultNorm.includes(word)) score += 10;
-                      });
-                    }
-                    // Boost when the result's podcast matches the show name we have
+                    const titleMatch = scoreEpisodeTitleMatch(targetNorm, normalizeEpisodeTitle(result.trackName), targetWords);
+                    let score = titleMatch.score;
+                    // Boost when the result's podcast matches the show name we have.
+                    // Tie-breaker only — it can reorder candidates but never make
+                    // an unmatched title acceptable on its own.
                     if (showNorm) {
                       if (collectionNorm === showNorm) score += 30;
                       else if (collectionNorm.includes(showNorm) || showNorm.includes(collectionNorm)) score += 20;
                     }
                     if (score > bestScore) {
                       bestScore = score;
+                      bestConfident = titleMatch.confident;
+                      bestTitleScore = titleMatch.score;
                       bestResult = result;
                     }
                   }
 
-                  // Require a meaningful title match: exact (100) and substring
-                  // (80) always pass, word overlap needs ≥3 significant words.
+                  // Require a meaningful title match: one title containing the
+                  // other always passes, word overlap needs ≥3 significant words.
                   // Accepting weaker matches silently loads the wrong podcast.
-                  const MIN_EPISODE_SCORE = 30;
-                  if (bestResult && bestScore >= MIN_EPISODE_SCORE) {
+                  if (bestResult && bestConfident) {
                     console.log('[HJ:podcast] iTunes episode search match', { score: bestScore, show: bestResult.collectionName, feedUrl: bestResult.feedUrl });
                     const found = {
                       feedUrl: bestResult.feedUrl,
                       podcastName: bestResult.collectionName,
                       artworkUrl: bestResult.artworkUrl600 || bestResult.artworkUrl100,
                       collectionId: bestResult.collectionId,
-                      // Exact (100) or substring (80) title match — safe to act on
-                      // without waiting for a scraped show name.
-                      quickConfident: bestScore >= 80
+                      // One title contains the other — safe to act on without
+                      // waiting for a scraped show name. Word overlap is not:
+                      // it still gets the show-name cross-check first.
+                      quickConfident: bestTitleScore >= 100
                     };
                     // Only remember the show mapping when the result's podcast
                     // actually matches the show name we were given.
@@ -8420,7 +8471,7 @@
                     }
                     return found;
                   }
-                  console.log('[HJ:podcast] iTunes episode search: best score', bestScore, 'below', MIN_EPISODE_SCORE, '— rejecting', bestResult?.collectionName);
+                  console.log('[HJ:podcast] iTunes episode search: no confident title match (best score', bestScore, ') — rejecting', bestResult?.collectionName);
                 }
               }
             } catch (e) {
@@ -8501,27 +8552,20 @@
             return null;
           }
 
-          const normalizeTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-          const targetTitle = normalizeTitle(episodeTitle || '');
+          const targetTitle = normalizeEpisodeTitle(episodeTitle);
+          const targetWords = significantTitleWords(targetTitle);
 
-          // Same scoring as parseRSSAndFindEpisode: substring beats word overlap
+          // Same scoring as pickEpisodeFromItems — one shared helper so the two
+          // choosers can never disagree about what counts as a match.
           let best = null;
           let bestScore = 0;
+          let bestConfident = false;
           if (targetTitle) {
             for (const ep of episodes) {
-              const itemTitle = normalizeTitle(ep.trackName || '');
-              let score = 0;
-              const targetStripped = targetTitle.replace(/\s/g, '');
-              const itemStripped = itemTitle.replace(/\s/g, '');
-              if (itemStripped.includes(targetStripped) || targetStripped.includes(itemStripped)) {
-                score = 100;
-              } else {
-                targetTitle.split(/\s+/).forEach(word => {
-                  if (word.length > 3 && itemTitle.includes(word)) score += 10;
-                });
-              }
+              const { score, confident } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(ep.trackName), targetWords);
               if (score > bestScore) {
                 bestScore = score;
+                bestConfident = confident;
                 best = ep;
               }
             }
@@ -8535,7 +8579,7 @@
             return null;
           }
 
-          const matchedByTitle = !!episodeTitle && bestScore > 0;
+          const matchedByTitle = !!episodeTitle && bestConfident;
           console.log('[HJ:podcast] iTunes lookup fallback', { collectionId, episode: best.trackName, score: bestScore, matchedByTitle });
           return {
             episode: {
@@ -8601,34 +8645,23 @@
       // items: [{ title, audioUrl, description, pubDate, link }] in feed order.
       // Returns the same result shape as parseRSSAndFindEpisode.
       const pickEpisodeFromItems = (items, episodeTitle, channelTitle, channelArtwork) => {
-        // Keep spaces for word-level matching
-        const normalizeTitle = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
-        const targetTitle = normalizeTitle(episodeTitle || '');
-        const targetStripped = targetTitle.replace(/\s/g, '');
+        const targetTitle = normalizeEpisodeTitle(episodeTitle);
+        const targetWords = significantTitleWords(targetTitle);
 
         let bestMatch = null;
         let bestScore = 0;
+        let bestConfident = false;
         let audioCount = 0;
 
         items.forEach((item) => {
           if (!item.audioUrl) return;
           audioCount++;
-          const itemTitle = normalizeTitle(item.title || '');
-          const itemStripped = itemTitle.replace(/\s/g, '');
-          let score = 0;
-
-          // Substring match beats word overlap (stripped versions for robustness)
-          if (targetStripped && (itemStripped.includes(targetStripped) || targetStripped.includes(itemStripped))) {
-            score = 100;
-          } else {
-            targetTitle.split(/\s+/).forEach(word => {
-              if (word.length > 3 && itemTitle.includes(word)) score += 10;
-            });
-          }
+          const { score, confident } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(item.title), targetWords);
 
           // Prefer the earliest item when scores tie (usually most recent episode)
           if (score > bestScore || !bestMatch) {
             bestScore = score;
+            bestConfident = confident;
             bestMatch = {
               title: item.title || 'Unknown Episode',
               audioUrl: item.audioUrl,
@@ -8641,7 +8674,10 @@
           }
         });
 
-        const matchedByTitle = !!episodeTitle && bestScore > 0;
+        // Only a confident match counts. A shared word or two is noise — the
+        // caller refuses to play an unconfirmed episode, which beats silently
+        // playing an unrelated one.
+        const matchedByTitle = !!episodeTitle && bestConfident;
         console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
 
         if (!bestMatch) {
