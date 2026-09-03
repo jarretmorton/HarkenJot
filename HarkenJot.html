@@ -2575,6 +2575,9 @@
     // Persisted best-effort under the HJStore 'net_hints' key; losing it only costs speed.
     const SHOW_FEED_TTL = 7 * 24 * 3600 * 1000;
     const PROXY_DEAD_TTL = 7 * 24 * 3600 * 1000;
+    // Custom domains known to be Substack publications. Hosts discovered at
+    // runtime are remembered separately, in netHints.substackHosts.
+    const SUBSTACK_SEED_HOSTS = ['latent.space', 'astralcodexten.com', 'dwarkesh.com'];
     const netHints = {
       data: null,
       load() {
@@ -2582,7 +2585,7 @@
           const stored = HJStore.get('net_hints');
           this.data = (stored && typeof stored === 'object') ? stored : {};
           this.data.proxyByHost = this.data.proxyByHost || {};
-          this.data.substackHosts = this.data.substackHosts || ['latent.space', 'astralcodexten.com'];
+          this.data.substackHosts = this.data.substackHosts || [];
           this.data.feedByShow = this.data.feedByShow || {};
           this.data.proxyDeadHosts = this.data.proxyDeadHosts || {};
         }
@@ -2623,7 +2626,13 @@
         delete d.proxyDeadHosts[host];
         this.save();
       },
-      isSubstackHost(host) { return this.load().substackHosts.includes(host); },
+      // Seeds are checked alongside the learned list rather than used as its
+      // default value. Seeding only on first load meant a host added to the code
+      // later never reached anyone who already had a net_hints record — their
+      // stored array won, and the new seed was dead on arrival.
+      isSubstackHost(host) {
+        return SUBSTACK_SEED_HOSTS.includes(host) || this.load().substackHosts.includes(host);
+      },
       recordSubstackHost(host) {
         const d = this.load();
         if (!d.substackHosts.includes(host)) { d.substackHosts.push(host); this.save(); }
@@ -3200,6 +3209,12 @@
       if (sentences < 4) return false;
       return !TRUNCATION_MARKERS.some(re => re.test(t));
     };
+
+    // Substack serves custom domains from its own stack, and the markup says so
+    // even when the hostname gives nothing away. Used to decide, once a page has
+    // actually been fetched, whether its /p/<slug> URL has a Substack API behind it.
+    const looksLikeSubstack = (html) =>
+      !!html && /substackcdn\.com|window\._preloads|\bavailable-content\b|substack\.com\/api\//i.test(html);
 
     // Publishers whose WAF reliably serves a challenge page to datacenter IPs.
     // The CORS proxy chain cannot win here — it just takes ~13s to lose — so
@@ -3873,7 +3888,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.51.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.52.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5370,6 +5385,13 @@
             }
           }
 
+          // Anything this short is a paywall stub, a subscriber preview, a consent
+          // shell, or a page whose real body never survived the proxy. Results
+          // under the threshold used to be banked on a 100-character gate, which
+          // meant the fallbacks never ran. Below it a result is kept as a floor
+          // while the pipeline goes looking for something better.
+          const THIN_ARTICLE_CHARS = 900;
+
           // Helper: fetch HTML via CORS proxies
           const fetchHtmlViaProxies = async (targetUrl) => {
             const corsProxies = [
@@ -5513,6 +5535,20 @@
               return null;
             }
             return result;
+          };
+
+          // Helper: turn an <origin>/api/v1/posts/<slug> payload into an article.
+          // Shared by the early path and by the fallback tier that fires when a
+          // page turns out to be Substack only after it has been fetched.
+          const parseSubstackPayload = (raw) => {
+            if (!raw) return null;
+            let data;
+            try { data = JSON.parse(raw); } catch (e) { return null; }
+            const bodyHtml = data?.body_html || data?.body || '';
+            if (!bodyHtml || bodyHtml.length < 100) return null;
+            const extracted = tryExtractArticle(`<html><body>${bodyHtml}</body></html>`);
+            if (!extracted) return null;
+            return { title: data.title || extracted.title, text: extracted.text };
           };
 
           // Helper: WordPress REST API article fetch. WordPress sites
@@ -6021,6 +6057,15 @@
           //   <pub>.substack.com/p/<slug>             — web link
           //   <custom-domain>/p/<slug>                — custom-domain Substack
           //   open.substack.com/pub/<pub>/p/<slug>    — share link from the Substack app
+          // Where the API lives, so the fallback tier can retry it if the fetched
+          // page turns out to be Substack after the early path had written the
+          // host off. `tried` records that the API was actually fetched, not just
+          // that a URL was worked out for it.
+          let substackApi = null;
+          // A short API body is a subscriber preview, not the post. It is kept as
+          // a floor for the pipeline rather than banked and returned.
+          let earlyCandidate = null;
+
           try {
             const u = new URL(url.startsWith('http') ? url : 'https://' + url);
             let apiOrigin = u.origin;
@@ -6036,43 +6081,50 @@
             if (slug) {
               // Only known Substack hosts get the full proxy chain. Plenty of
               // non-Substack blogs use /p/<slug> paths; an unknown custom domain
-              // gets a single cheap probe, and is remembered on success.
+              // gets a cheap probe, and is remembered on success.
               const pageHost = u.hostname.replace(/^www\./, '');
               const isKnownSubstack = !!appShareMatch ||
                 pageHost.endsWith('.substack.com') || pageHost === 'open.substack.com' ||
                 netHints.isSubstackHost(pageHost);
               const apiUrl = `${apiOrigin}/api/v1/posts/${slug}`;
+              // chainTried marks the full proxy chain as spent. The cheap probe
+              // deliberately leaves it false so the fallback tier can come back
+              // with the full chain once the page identifies itself as Substack.
+              substackApi = { apiUrl, pageHost, chainTried: false };
               let apiResponse = null;
               if (isKnownSubstack) {
                 showToast('Trying Substack API...');
+                substackApi.chainTried = true;
                 apiResponse = await fetchHtmlViaProxies(apiUrl);
               } else {
-                try {
-                  const probe = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(apiUrl)}`, 5000);
-                  if (probe.ok) apiResponse = await probe.text();
-                } catch (e) { /* not a Substack — fall through to the standard chain */ }
+                // Two proxies, not one. This used to be a single call through
+                // corsproxy.io's bare `?<url>` form; that form stopped answering
+                // dependably, and its failure made every unrecognised custom-domain
+                // Substack look like an ordinary blog with a /p/ path.
+                apiResponse = await raceStaggered([
+                  `https://corsproxy.io/?url=${encodeURIComponent(apiUrl)}`,
+                  `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
+                ].map((probeUrl) => async (signal) => {
+                  try {
+                    const r = await fetchWithTimeout(probeUrl, 6000, { signal });
+                    return r.ok ? await r.text() : null;
+                  } catch (e) { return null; }
+                }), { staggerMs: 1500 });
               }
-              if (apiResponse) {
-                try {
-                  const data = JSON.parse(apiResponse);
-                  const bodyHtml = data?.body_html || data?.body || '';
-                  if (bodyHtml && bodyHtml.length > 100) {
-                    const wrappedHtml = `<html><body>${bodyHtml}</body></html>`;
-                    const extracted = tryExtractArticle(wrappedHtml);
-                    if (extracted) {
-                      if (!isKnownSubstack) netHints.recordSubstackHost(pageHost);
-                      const title = data.title || extracted.title;
-                      const { text: bodyText } = extracted;
-                      const sentences = splitIntoSentences(bodyText);
-                      sentencesRef.current = sentences;
-                      addSource({ type: 'article', title, url, content: bodyText });
-                      setUrl('');
-                      showToast('Article loaded successfully!');
-                      setLoading(false);
-                      return;
-                    }
-                  }
-                } catch (_) { /* not a Substack response — fall through */ }
+              const parsed = parseSubstackPayload(apiResponse);
+              if (parsed) {
+                if (!isKnownSubstack) netHints.recordSubstackHost(pageHost);
+                if (parsed.text.length >= THIN_ARTICLE_CHARS) {
+                  const sentences = splitIntoSentences(parsed.text);
+                  sentencesRef.current = sentences;
+                  addSource({ type: 'article', title: parsed.title, url, content: parsed.text });
+                  setUrl('');
+                  showToast('Article loaded successfully!');
+                  setLoading(false);
+                  return;
+                }
+                console.log(`[HJ:article] Substack API returned only ${parsed.text.length} chars — treating as a preview`);
+                earlyCandidate = parsed;
               }
             }
           } catch (e) {
@@ -6155,15 +6207,17 @@
           // this publisher starts the working routes immediately instead of
           // rediscovering the block. Recorded on a clean miss only — a thin result
           // means a proxy did answer, so the chain is alive and worth trying again.
+          // Judged on the chain's own result, before the Substack API candidate is
+          // folded in below: that came from a different route entirely and says
+          // nothing about whether the proxies got through.
           if (extracted) netHints.clearProxyDead(articleHost);
           else netHints.recordProxyDead(articleHost);
 
-          // Anything this short is a paywall stub, a consent shell, or a page
-          // whose real body never survived the proxy. Tier-1 used to bank those
-          // on a 100-character gate, which meant the fallbacks below never ran.
-          // Below the threshold we keep the tier-1 text as a floor but go
-          // looking for something better.
-          const THIN_ARTICLE_CHARS = 900;
+          // A subscriber preview from the Substack API still beats what the page
+          // gave us; the pipeline below tries to improve on it either way.
+          if (earlyCandidate && (!extracted || earlyCandidate.text.length > extracted.text.length)) {
+            extracted = earlyCandidate;
+          }
 
           // … unless it is simply a short post. A company newsroom announcement
           // can be a complete 600-character story, and running the fallbacks for it
@@ -6173,7 +6227,11 @@
           // text it already had. looksCompleteArticle checks shape rather than
           // length, so a finished short post is banked immediately and only genuine
           // stubs (cut off mid-sentence, or asking you to subscribe) go looking.
+          // A Substack preview is excluded by name rather than by shape: it can read
+          // as a finished short post while the rest of the piece sits behind the
+          // wall, and we already know it is a preview because the API said so.
           const thinButComplete = !!extracted &&
+            extracted !== earlyCandidate &&
             extracted.text.length < THIN_ARTICLE_CHARS &&
             looksCompleteArticle(extracted.text);
           if (thinButComplete) {
@@ -6188,6 +6246,21 @@
           // rate-limited, and the proxies handle most articles without it.
           if (!thinButComplete && (!extracted || extracted.text.length < THIN_ARTICLE_CHARS)) {
             showToast('Trying fallback sources...');
+
+            // Strategy 1.5: the Substack API for a custom domain that wasn't
+            // recognised up front. The early path only spends proxies on hosts
+            // already known to be Substack — but once tier-1 has the page in hand,
+            // its markup says outright what the hostname didn't, and the API
+            // returns clean body_html where the page yields a comment-only shell
+            // or a subscriber preview. Costs nothing on every other site.
+            const substackP = (substackApi && !substackApi.chainTried && !earlyCandidate && looksLikeSubstack(html))
+              ? (async () => {
+                  console.log('[HJ:article] page markup is Substack — trying its API');
+                  const parsed = parseSubstackPayload(await fetchHtmlViaProxies(substackApi.apiUrl));
+                  if (parsed) netHints.recordSubstackHost(substackApi.pageHost);
+                  return parsed;
+                })().catch(() => null)
+              : Promise.resolve(null);
 
             // Strategy 2: Wayback Machine (archive.org has CORS headers, no proxy needed)
             const waybackP = earlyWaybackP || fetchWayback();
@@ -6239,6 +6312,7 @@
             };
 
             const fallbackTiers = [
+              [substackP, 'Substack API'],
               [waybackP, 'Wayback Machine'],
               [archiveP, 'archive.today'],
               [ampP, 'AMP version'],
