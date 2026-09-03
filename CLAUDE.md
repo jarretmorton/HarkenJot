@@ -474,7 +474,20 @@ untrimmed text if the trim would leave under 300 chars. `extractArticleContent`
 does the DOM-side equivalent, removing elements with 5+ links where 70%+ of the
 text sits inside them and no real paragraph does.
 
-The fallback order is Wayback → archive.today → AMP → WordPress → Jina. The two
+**A custom domain hides which stack it is.** Substack serves `<origin>/api/v1/posts/<slug>`
+with clean `body_html`, and the early path spends the full proxy chain on it for
+hosts already known to be Substack — `SUBSTACK_SEED_HOSTS` plus whatever
+`netHints.recordSubstackHost` has learned. Seeds are checked *alongside* the
+stored list, never used as its default: seeding only on first load meant a host
+added to the code later never reached anyone who already had a `net_hints`
+record. An unrecognised `/p/<slug>` host gets a two-proxy probe instead of the
+chain, and if that misses, `looksLikeSubstack()` reads the fetched page markup —
+`substackcdn.com`, `window._preloads`, `available-content` — and retries the API
+as a fallback tier, so a new custom domain works without a code change. An API
+body under `THIN_ARTICLE_CHARS` is a subscriber preview: it is kept as a floor
+for the pipeline, never banked and returned.
+
+The fallback order is Substack API → Wayback → archive.today → AMP → WordPress → Jina. The two
 archive routes lead because a WAF blocks the *publisher's* origin, not the
 archive's, so a snapshot is the likeliest thing to survive. When every route
 fails on a bot-walled host the toast names the host rather than claiming the
