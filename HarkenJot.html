@@ -2833,23 +2833,29 @@
 
     // Score how closely a feed/iTunes episode title matches the title we are
     // looking for. Shared by every episode chooser so they cannot drift.
-    // Returns { score, confident }:
-    //   100 — one title contains the other (ignoring punctuation and spacing)
-    //   10 per distinct significant word the candidate shares with the target
-    // `confident` is what callers must gate on before playing an episode: a
-    // single incidental word in common ("about", "agent", "openai") is not a
-    // match, and acting on one silently plays an unrelated episode.
+    // Returns { score, containment, confident }:
+    //   100 — one title contains the other (ignoring punctuation and spacing);
+    //         `containment` is set, and this is the only evidence strong enough
+    //         to identify a *podcast* from an episode title alone
+    //   10 per distinct significant word the candidate shares with the target;
+    //         `confident` at three of them (or all, for a title too short to
+    //         have three), which is enough to pick an item out of a feed we
+    //         already know is the right show, and not enough for anything else
+    // Word overlap cannot identify a show because AI podcasts all talk about the
+    // same nouns in the same week: "GPT-6 & OpenAI's Comeback, Hugging Face" and
+    // "Black Hat 2026: OpenAI's Hugging Face Hack" are different shows that share
+    // three significant words.
     const EPISODE_STOP_WORDS = new Set(['a','an','the','of','in','on','at','to','for','and','or','but','with','by','from','as','is','are','was','were','be','been','it','its','this','that','these','those','we','our','you','your','about','into','out','up','do','so','no','not','if','can','has','had','have','will','just','also','than','what','why','how','when','who','all','more','most','over','after','before','part','episode','podcast','ep','w','feat','featuring','vs','via']);
     const normalizeEpisodeTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
     const significantTitleWords = (normalized) =>
       new Set(normalized.split(/\s+/).filter(w => w.length > 3 && !EPISODE_STOP_WORDS.has(w)));
 
     const scoreEpisodeTitleMatch = (targetNorm, candidateNorm, targetWords) => {
-      if (!targetNorm || !candidateNorm) return { score: 0, confident: false };
+      if (!targetNorm || !candidateNorm) return { score: 0, containment: false, confident: false };
       const targetStripped = targetNorm.replace(/\s/g, '');
       const candidateStripped = candidateNorm.replace(/\s/g, '');
       if (candidateStripped.includes(targetStripped) || targetStripped.includes(candidateStripped)) {
-        return { score: 100, confident: true };
+        return { score: 100, containment: true, confident: true };
       }
       // Whole-word overlap on distinct significant words. A substring test here
       // would let "face" match "surface" and a repeated word count twice.
@@ -2859,9 +2865,9 @@
       for (const w of words) { if (candidateWords.has(w)) shared++; }
       const score = shared * 10;
       // Three significant words in common, or every one of them when the title
-      // is too short to have three — matches searchForRSSFeed's MIN_EPISODE_SCORE.
+      // is too short to have three.
       const needed = Math.min(3, words.size);
-      return { score, confident: needed > 0 && shared >= needed };
+      return { score, containment: false, confident: needed > 0 && shared >= needed };
     };
 
     // Persistent storage backed by IndexedDB. Replaces localStorage (~5 MB cap)
@@ -3888,7 +3894,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.52.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.52.2</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -8499,33 +8505,50 @@
                   const targetWords = significantTitleWords(targetNorm);
                   let bestResult = null;
                   let bestScore = -1;
-                  let bestConfident = false;
                   let bestTitleScore = 0;
+                  let bestContainment = false;
+                  let bestCorroborated = false;
 
                   for (const result of episodeData.results) {
                     if (!result.feedUrl) continue;
                     const collectionNorm = normalizeForMatch(result.collectionName || '');
                     const titleMatch = scoreEpisodeTitleMatch(targetNorm, normalizeEpisodeTitle(result.trackName), targetWords);
                     let score = titleMatch.score;
-                    // Boost when the result's podcast matches the show name we have.
-                    // Tie-breaker only — it can reorder candidates but never make
-                    // an unmatched title acceptable on its own.
-                    if (showNorm) {
-                      if (collectionNorm === showNorm) score += 30;
-                      else if (collectionNorm.includes(showNorm) || showNorm.includes(collectionNorm)) score += 20;
+                    // Does this result's podcast agree with the show name we already
+                    // have? Boosts the ranking, and separately licenses a weaker
+                    // title match below — a title we half-recognise on a show we do
+                    // recognise is evidence; on an unknown show it is a coincidence.
+                    let corroborated = false;
+                    if (showNorm && collectionNorm) {
+                      if (collectionNorm === showNorm) { score += 30; corroborated = true; }
+                      else if (collectionNorm.includes(showNorm) || showNorm.includes(collectionNorm)) { score += 20; corroborated = true; }
                     }
-                    if (score > bestScore) {
+                    // Corroboration outranks score outright. Scored alone, a
+                    // result *from the show we are looking for* ties with some
+                    // other show's episode that happens to share three nouns,
+                    // and whichever iTunes listed first would win.
+                    const better = (corroborated !== bestCorroborated)
+                      ? corroborated
+                      : score > bestScore;
+                    if (better) {
                       bestScore = score;
-                      bestConfident = titleMatch.confident;
                       bestTitleScore = titleMatch.score;
+                      bestContainment = titleMatch.containment;
+                      bestCorroborated = corroborated;
                       bestResult = result;
                     }
                   }
 
-                  // Require a meaningful title match: one title containing the
-                  // other always passes, word overlap needs ≥3 significant words.
-                  // Accepting weaker matches silently loads the wrong podcast.
-                  if (bestResult && bestConfident) {
+                  // This search decides *which podcast* to load, so the bar is
+                  // containment: one title has to contain the other. Word overlap
+                  // is not evidence of identity here — every AI show covers the
+                  // same nouns in the same week, and a brand-new episode iTunes
+                  // has not indexed yet leaves only those near-misses to choose
+                  // from. Word overlap passes only when the result's podcast also
+                  // matches a show name we independently know. Otherwise we return
+                  // nothing and the caller falls back to scraping the Spotify page
+                  // for the real show name, which is what should decide this.
+                  if (bestResult && (bestContainment || bestCorroborated)) {
                     console.log('[HJ:podcast] iTunes episode search match', { score: bestScore, show: bestResult.collectionName, feedUrl: bestResult.feedUrl });
                     const found = {
                       feedUrl: bestResult.feedUrl,
@@ -8545,7 +8568,7 @@
                     }
                     return found;
                   }
-                  console.log('[HJ:podcast] iTunes episode search: no confident title match (best score', bestScore, ') — rejecting', bestResult?.collectionName);
+                  console.log('[HJ:podcast] iTunes episode search: no title containment and no show corroboration (best score', bestScore, ') — rejecting', bestResult?.collectionName);
                 }
               }
             } catch (e) {
@@ -8634,13 +8657,19 @@
           let best = null;
           let bestScore = 0;
           let bestConfident = false;
+          let bestContainment = false;
+          let runnerUpScore = 0;
           if (targetTitle) {
             for (const ep of episodes) {
-              const { score, confident } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(ep.trackName), targetWords);
+              const { score, confident, containment } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(ep.trackName), targetWords);
               if (score > bestScore) {
+                runnerUpScore = Math.max(runnerUpScore, bestScore);
                 bestScore = score;
                 bestConfident = confident;
+                bestContainment = containment;
                 best = ep;
+              } else {
+                runnerUpScore = Math.max(runnerUpScore, score);
               }
             }
           } else {
@@ -8653,8 +8682,9 @@
             return null;
           }
 
-          const matchedByTitle = !!episodeTitle && bestConfident;
-          console.log('[HJ:podcast] iTunes lookup fallback', { collectionId, episode: best.trackName, score: bestScore, matchedByTitle });
+          const matchedByTitle = !!episodeTitle &&
+            (bestContainment || (bestConfident && bestScore > runnerUpScore));
+          console.log('[HJ:podcast] iTunes lookup fallback', { collectionId, episode: best.trackName, score: bestScore, runnerUpScore, matchedByTitle });
           return {
             episode: {
               title: best.trackName || 'Unknown Episode',
@@ -8725,17 +8755,21 @@
         let bestMatch = null;
         let bestScore = 0;
         let bestConfident = false;
+        let bestContainment = false;
+        let runnerUpScore = 0;
         let audioCount = 0;
 
         items.forEach((item) => {
           if (!item.audioUrl) return;
           audioCount++;
-          const { score, confident } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(item.title), targetWords);
+          const { score, confident, containment } = scoreEpisodeTitleMatch(targetTitle, normalizeEpisodeTitle(item.title), targetWords);
 
           // Prefer the earliest item when scores tie (usually most recent episode)
           if (score > bestScore || !bestMatch) {
+            if (bestMatch) runnerUpScore = Math.max(runnerUpScore, bestScore);
             bestScore = score;
             bestConfident = confident;
+            bestContainment = containment;
             bestMatch = {
               title: item.title || 'Unknown Episode',
               audioUrl: item.audioUrl,
@@ -8745,20 +8779,26 @@
               pubDate: item.pubDate || '',
               link: item.link || ''
             };
+          } else {
+            runnerUpScore = Math.max(runnerUpScore, score);
           }
         });
 
-        // Only a confident match counts. A shared word or two is noise — the
-        // caller refuses to play an unconfirmed episode, which beats silently
-        // playing an unrelated one.
-        const matchedByTitle = !!episodeTitle && bestConfident;
-        console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore}${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
+        // Containment settles it. Word overlap only counts when it also picks a
+        // clear winner: a show that covers a topic every week has several
+        // episodes sharing the same three nouns, and when the episode we want
+        // isn't in this list at all (a truncated or stale one), the runner-up
+        // ties are all that is left. The caller refuses an unmatched episode
+        // rather than playing whichever of them sorted first.
+        const matchedByTitle = !!episodeTitle &&
+          (bestContainment || (bestConfident && bestScore > runnerUpScore));
+        console.log(`[HJ:podcast] parsed ${items.length} items, ${audioCount} with audio, bestScore ${bestScore} (runner-up ${runnerUpScore})${episodeTitle && !matchedByTitle ? ' (title not matched — first-item fallback)' : ''}`);
 
         if (!bestMatch) {
           console.error(`[HJ:podcast] feed parsed but no episodes with audio found (${items.length} items)`);
           return { ok: false, reason: 'no_audio_items', detail: `${items.length} items, 0 with audio` };
         }
-        return { ok: true, episode: bestMatch, matchedByTitle, matchScore: bestScore };
+        return { ok: true, episode: bestMatch, matchedByTitle, matchScore: bestScore, matchedByContainment: bestContainment };
       };
 
       // rss2json fetches the feed server-side and returns CORS-enabled JSON.
@@ -8818,13 +8858,16 @@
         // the archive), skip straight to rss2json instead of burning up to a
         // minute of proxy timeouts on a host known to block them.
         // Feed cache: reuse a recently parsed episode list before touching the
-        // network. With an episodeTitle, accept a hit only when the title actually
-        // matched (a brand-new episode may postdate the cache); with no title
-        // ("latest episode"), trust only a fresh cache.
+        // network. With an episodeTitle, accept a hit only on a containment match
+        // — a brand-new episode postdates the cache, and settling for the word
+        // overlap of some older episode in the stale list is exactly how the
+        // wrong episode gets played. Word overlap has to go refetch and prove
+        // itself against the live feed. With no title ("latest episode"), trust
+        // only a fresh cache.
         const cached = getCachedFeed(feedUrl);
         if (cached) {
           const fromCache = pickEpisodeFromItems(cached.items || [], episodeTitle, cached.channelTitle, cached.channelArtwork);
-          if (fromCache.ok && (episodeTitle ? fromCache.matchedByTitle : isFeedCacheFresh(cached))) {
+          if (fromCache.ok && (episodeTitle ? fromCache.matchedByContainment : isFeedCacheFresh(cached))) {
             console.log('[HJ:podcast] feed cache hit for', feedUrl);
             return fromCache;
           }
