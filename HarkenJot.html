@@ -2570,6 +2570,63 @@
         });
       });
 
+    // Fetch a URL from inside a sandboxed iframe, so the request carries the
+    // opaque origin "null" instead of this page's origin.
+    //
+    // ForumMagnum (LessWrong / Alignment Forum / EA Forum) answers /graphql with
+    // `Access-Control-Allow-Origin: null` for exactly this shape of caller — its
+    // customizable home page runs user code in a srcdoc frame — while a normal
+    // cross-origin request from this app gets no CORS headers at all. The other
+    // half of the win is the network path: the fetch leaves the reader's own
+    // browser, so the WAF that hands every CORS proxy a challenge page never
+    // sees a datacenter IP.
+    //
+    // Resolves with the response body, or null on any failure (blocked frame,
+    // CSP, non-2xx, timeout) so callers can fall through to the proxy chain.
+    const fetchViaNullOriginFrame = (targetUrl, init = {}, ms = 10000) =>
+      new Promise((resolve) => {
+        let frame = null;
+        let timer = null;
+        let done = false;
+        const token = 'hj' + Math.random().toString(36).slice(2);
+        const onMessage = (e) => {
+          const d = e.data;
+          if (!d || d.hjFrameToken !== token) return;
+          if (frame && e.source !== frame.contentWindow) return;
+          finish(typeof d.body === 'string' ? d.body : null);
+        };
+        const finish = (value) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          window.removeEventListener('message', onMessage);
+          if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
+          resolve(value);
+        };
+        try {
+          window.addEventListener('message', onMessage);
+          frame = document.createElement('iframe');
+          // allow-scripts WITHOUT allow-same-origin is what makes the origin
+          // opaque; adding allow-same-origin would hand back this page's origin
+          // and defeat the entire point.
+          frame.setAttribute('sandbox', 'allow-scripts');
+          frame.setAttribute('aria-hidden', 'true');
+          frame.style.display = 'none';
+          frame.srcdoc = '<!doctype html><meta charset="utf-8"><script>' +
+            '(function(){var t=' + JSON.stringify(token) + ';' +
+            'var send=function(b){try{parent.postMessage({hjFrameToken:t,body:b},"*");}catch(e){}};' +
+            'try{fetch(' + JSON.stringify(targetUrl) + ',' + JSON.stringify(init) + ')' +
+            '.then(function(r){return r.ok?r.text():null;})' +
+            '.then(send,function(){send(null);});}catch(e){send(null);}})();' +
+            '<\/script>';
+          timer = setTimeout(() => finish(null), ms);
+          document.body.appendChild(frame);
+        } catch (e) {
+          console.log('[HJ:net] null-origin frame unavailable:', e?.message || e);
+          finish(null);
+        }
+      });
+
     // Small cross-session memory for network routing: which CORS proxy last worked per host,
     // which custom domains turned out to be Substacks, and show-name → RSS feed mappings.
     // Persisted best-effort under the HJStore 'net_hints' key; losing it only costs speed.
@@ -3121,16 +3178,54 @@
       return pdfPatterns.some(p => p.test(lower));
     };
 
-    // Detect ForumMagnum sites (LessWrong, Alignment Forum, EA Forum) which expose a public GraphQL API
-    const isForumMagnumUrl = (url) => {
+    // ForumMagnum sites (LessWrong, Alignment Forum, EA Forum) are React apps
+    // behind a WAF that hands CORS proxies a challenge page, so the rendered
+    // page is never worth scraping. Two routes go around it, and both are keyed
+    // on the post id sitting in the URL: the site's own public GraphQL API, and
+    // GreaterWrong — a lightweight server-rendered mirror of the same forums
+    // that has no WAF in front of it.
+    //
+    // Alignment Forum posts are mirrored from LessWrong under the same post id,
+    // and AF's own /graphql doesn't reliably return htmlBody, so AF URLs ask
+    // lesswrong.com first and fall back to their own origin. GreaterWrong hosts
+    // carry LessWrong/EA Forum post ids too, so a greaterwrong.com link pasted
+    // into the reader resolves through the same two routes.
+    const FORUM_MAGNUM_SITES = {
+      'lesswrong.com': { label: 'LessWrong', gql: ['https://www.lesswrong.com'], mirror: 'https://www.greaterwrong.com' },
+      'alignmentforum.org': { label: 'the Alignment Forum', gql: ['https://www.lesswrong.com', 'https://www.alignmentforum.org'], mirror: 'https://www.greaterwrong.com' },
+      'greaterwrong.com': { label: 'LessWrong', gql: ['https://www.lesswrong.com'], mirror: 'https://www.greaterwrong.com' },
+      'forum.effectivealtruism.org': { label: 'the EA Forum', gql: ['https://forum.effectivealtruism.org'], mirror: 'https://ea.greaterwrong.com' },
+      'ea.greaterwrong.com': { label: 'the EA Forum', gql: ['https://forum.effectivealtruism.org'], mirror: 'https://ea.greaterwrong.com' },
+    };
+
+    // Returns { label, postId, gqlOrigins, mirrorUrl } for a ForumMagnum post
+    // URL, or null for any other link — including the forums' own listing, tag
+    // and profile pages, which carry no post to fetch.
+    const parseForumMagnumUrl = (url) => {
       try {
-        const h = safeHostname(url);
-        return (
-          h === 'www.lesswrong.com' || h === 'lesswrong.com' ||
-          h === 'www.alignmentforum.org' || h === 'alignmentforum.org' ||
-          h === 'forum.effectivealtruism.org'
-        );
-      } catch { return false; }
+        const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+        const site = FORUM_MAGNUM_SITES[u.hostname.replace(/^www\./, '')];
+        if (!site) return null;
+        const parts = u.pathname.split('/').filter(Boolean);
+        // /posts/<id>/<slug> is the usual shape; a post opened from inside a
+        // sequence is /s/<sequenceId>/p/<id>/<slug>. Both carry the same id.
+        let idx = parts.indexOf('posts');
+        if (idx < 0) idx = parts.indexOf('p');
+        const postId = idx >= 0 ? parts[idx + 1] : null;
+        // Post ids are Mongo-style alphanumeric keys. Anything else means the
+        // path only looked like a post link.
+        if (!postId || !/^[A-Za-z0-9]{8,32}$/.test(postId)) return null;
+        const slug = parts[idx + 2] || '';
+        return {
+          label: site.label,
+          postId,
+          gqlOrigins: site.gql,
+          // ?comments=false leaves GreaterWrong's comment tree off the page
+          // entirely, and hide-nav-bars drops the site chrome — so what comes
+          // back is the post and almost nothing else.
+          mirrorUrl: `${site.mirror}/posts/${postId}${slug ? '/' + slug : ''}?comments=false&hide-nav-bars=true`,
+        };
+      } catch { return null; }
     };
 
     // Bot walls, CAPTCHA interstitials and "access denied" shells are served
@@ -3894,7 +3989,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.52.2</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.53.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5972,83 +6067,122 @@
             return;
           }
 
-          // Strategy 0: ForumMagnum GraphQL API (LessWrong, Alignment Forum, EA Forum)
-          // These sites block CORS proxy requests with 403, but expose a public GraphQL API
-          // that returns clean post HTML via their /graphql endpoint.
-          // Alignment Forum posts are mirrored from LessWrong with the same documentId,
-          // and AF's own /graphql endpoint doesn't reliably return htmlBody — so route
-          // alignmentforum.org URLs to lesswrong.com's GraphQL, falling back to the
-          // post's own origin if that fails.
-          if (isForumMagnumUrl(url)) {
+          // Strategy 0: ForumMagnum posts (LessWrong, Alignment Forum, EA Forum).
+          //
+          // Scraping the page is hopeless — these sites sit behind a WAF that
+          // answers every CORS proxy with a challenge page rather than the post.
+          // Two routes go around it, tried in this order:
+          //
+          //   1. The site's own /graphql, called from a sandboxed iframe. It
+          //      grants `Access-Control-Allow-Origin: null` to opaque origins,
+          //      and the request goes out from the reader's own browser, so it
+          //      is an ordinary visitor rather than a datacenter IP. Returns
+          //      htmlBody: the post, with no nav, no footer and no comments.
+          //   2. The same query as a `?query=` GET through the CORS proxy chain,
+          //      raced against GreaterWrong — a server-rendered mirror of these
+          //      forums with no WAF in front of it. Whichever answers first wins;
+          //      the GraphQL route starts 3s ahead because its result is cleaner.
+          //
+          // The proxied GraphQL call goes through fetchHtmlViaProxies rather than a
+          // hand-rolled loop for a reason that cost this path its results before:
+          // a proxy will happily forward a compressed body without the matching
+          // Content-Encoding header, so a plain response.text() hands back binary
+          // and JSON.parse then fails on every proxy in turn — indistinguishable
+          // from the site being down. The shared fetcher detects that and
+          // decompresses, and brings the staggered race and the remembered
+          // per-host proxy along with it.
+          const forumPost = parseForumMagnumUrl(url);
+          if (forumPost) {
             try {
-              showToast('Fetching via LessWrong API...');
-              const urlObj = new URL(url.startsWith('http') ? url : 'https://' + url);
-              const pathParts = urlObj.pathname.split('/').filter(Boolean);
-              // URL format: /posts/{documentId}/{slug}
-              const postsIdx = pathParts.indexOf('posts');
-              const documentId = postsIdx >= 0 ? pathParts[postsIdx + 1] : null;
+              showToast(`Fetching from ${forumPost.label}...`);
+              const { postId, gqlOrigins, mirrorUrl } = forumPost;
+              const gqlQuery = `{post(input:{selector:{documentId:"${postId}"}}){result{title,htmlBody}}}`;
 
-              if (documentId) {
-                const gqlQuery = `{post(input:{selector:{documentId:"${documentId}"}}){result{title,htmlBody}}}`;
-                const host = urlObj.hostname.replace(/^www\./, '');
-                const gqlOrigins = host === 'alignmentforum.org'
-                  ? ['https://www.lesswrong.com', urlObj.origin]
-                  : [urlObj.origin];
-
-                // Try each origin through every available CORS proxy. The standard
-                // fetcher uses three proxies; we mirror that here so the GraphQL path
-                // doesn't silently fail when one proxy is rate-limited or down.
-                const gqlProxies = [
-                  { name: 'allorigins', wrap: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-                  { name: 'corsproxy.io', wrap: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}` },
-                  { name: 'codetabs', wrap: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
-                ];
-
-                let loaded = false;
-                outer: for (const origin of gqlOrigins) {
-                  const gqlUrl = `${origin}/graphql?query=${encodeURIComponent(gqlQuery)}`;
-                  for (const proxy of gqlProxies) {
-                    try {
-                      const response = await fetchWithTimeout(proxy.wrap(gqlUrl), 8000);
-                      if (!response.ok) {
-                        console.log(`GraphQL via ${proxy.name} (${origin}) returned ${response.status}`);
-                        continue;
-                      }
-                      const text = await response.text();
-                      let gqlData;
-                      try { gqlData = JSON.parse(text); } catch {
-                        console.log(`GraphQL via ${proxy.name} (${origin}) returned non-JSON`);
-                        continue;
-                      }
-                      if (gqlData?.errors?.length) {
-                        console.log(`GraphQL via ${proxy.name} (${origin}) errors:`, gqlData.errors);
-                      }
-                      const result = gqlData?.data?.post?.result;
-                      if (result?.htmlBody && result.htmlBody.length > 100) {
-                        const extracted = tryExtractArticle(result.htmlBody);
-                        if (extracted) {
-                          const title = result.title || extracted.title;
-                          const { text: bodyText } = extracted;
-                          const sentences = splitIntoSentences(bodyText);
-                          sentencesRef.current = sentences;
-                          addSource({ type: 'article', title, url, content: bodyText });
-                          setUrl('');
-                          showToast('Article loaded successfully!');
-                          setLoading(false);
-                          loaded = true;
-                          break outer;
-                        }
-                      }
-                    } catch (e) {
-                      console.log(`GraphQL via ${proxy.name} (${origin}) failed:`, e.message);
-                    }
-                  }
+              // Turn a /graphql response body into an article, whichever
+              // transport carried it.
+              const parseGqlPost = (raw) => {
+                if (!raw) return null;
+                let data;
+                try { data = JSON.parse(raw); } catch { return null; }
+                if (data?.errors?.length) {
+                  console.log('[HJ:forum] GraphQL errors:', data.errors.map(e => e?.message).join('; '));
                 }
-                if (loaded) return;
+                const result = data?.data?.post?.result;
+                if (!result?.htmlBody || result.htmlBody.length < 100) return null;
+                const extracted = tryExtractArticle(`<html><body>${result.htmlBody}</body></html>`);
+                if (!extracted) return null;
+                console.log('[HJ:forum] GraphQL success', { chars: extracted.text.length });
+                return { title: result.title || extracted.title, text: extracted.text };
+              };
+
+              // GreaterWrong renders the post into <main class="post"> with the
+              // body in .body-text.post-body; ?comments=false already left the
+              // comment tree off the page. Hand the extractor that subtree alone
+              // so the post meta line and the "Link without comments" footer
+              // can't end up in the saved text. The title lives in h1.post-title
+              // — the fragment carries none of the usual title metadata, so it
+              // has to be read off the page and passed through.
+              const tryGreaterWrong = async () => {
+                const html = await fetchHtmlViaProxies(mirrorUrl);
+                if (!html) return null;
+                let doc = null;
+                try { doc = new DOMParser().parseFromString(html, 'text/html'); } catch (e) { /* fall through */ }
+                const bodyEl = doc && (doc.querySelector('.post-body') || doc.querySelector('main.post'));
+                // Slicing the body out is the point; handing over the whole
+                // document is only what happens if the markup has moved.
+                const extracted = bodyEl
+                  ? tryExtractArticle(`<html><body>${bodyEl.innerHTML}</body></html>`)
+                  : tryExtractArticle(html);
+                if (!extracted) return null;
+                const heading = (doc?.querySelector('h1.post-title')?.textContent || '').replace(/\s+/g, ' ').trim();
+                const pageTitle = (doc?.querySelector('title')?.textContent || '')
+                  .replace(/\s+/g, ' ')
+                  // GreaterWrong signs its pages ("… - LessWrong 2.0 viewer")
+                  .replace(/\s+[-–—]\s+[^-–—]*viewer\s*$/i, '')
+                  .trim();
+                console.log('[HJ:forum] GreaterWrong success', { sliced: !!bodyEl, chars: extracted.text.length });
+                return { title: heading || pageTitle || extracted.title, text: extracted.text };
+              };
+
+              // Route 1: the null-origin frame, one origin at a time. It either
+              // answers in a couple of seconds or the site is unreachable.
+              let article = null;
+              for (const origin of gqlOrigins) {
+                article = parseGqlPost(await fetchViaNullOriginFrame(`${origin}/graphql`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ query: gqlQuery }),
+                }, 10000));
+                if (article) break;
               }
-              console.log('ForumMagnum GraphQL failed, falling back to standard strategies');
+
+              // Route 2: proxied GraphQL, raced against the mirror.
+              if (!article) {
+                console.log('[HJ:forum] direct GraphQL unavailable — trying proxies and the GreaterWrong mirror');
+                article = await raceStaggered([
+                  async () => {
+                    for (const origin of gqlOrigins) {
+                      const parsed = parseGqlPost(await fetchHtmlViaProxies(`${origin}/graphql?query=${encodeURIComponent(gqlQuery)}`));
+                      if (parsed) return parsed;
+                    }
+                    return null;
+                  },
+                  async () => await tryGreaterWrong().catch(() => null),
+                ], { staggerMs: 3000 });
+              }
+
+              if (article) {
+                const sentences = splitIntoSentences(article.text);
+                sentencesRef.current = sentences;
+                addSource({ type: 'article', title: article.title, url, content: article.text });
+                setUrl('');
+                showToast('Article loaded successfully!');
+                setLoading(false);
+                return;
+              }
+              console.log('ForumMagnum routes failed, falling back to standard strategies');
             } catch (e) {
-              console.log('ForumMagnum GraphQL error:', e.message);
+              console.log('ForumMagnum fetch error:', e?.message || e);
             }
           }
 

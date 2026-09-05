@@ -314,6 +314,8 @@ loads on demand from `cdn.jsdelivr.net`.
 - **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
 - **X.com / Twitter oEmbed** — `publish.twitter.com/oembed` for embedding X.com videos and tweets
 - **FxTwitter / vxTwitter / Twitter syndication** — `api.fxtwitter.com`, `api.vxtwitter.com`, and `cdn.syndication.twimg.com` for extracting X.com post and Article text in the reader tab (x.com serves an empty JS shell to CORS proxies, so the page itself is never scraped); Jina Reader and `archive.ph` snapshots are rendered-page fallbacks for X Article bodies the mirror APIs don't carry
+- **ForumMagnum GraphQL** — `www.lesswrong.com/graphql`, `www.alignmentforum.org/graphql`, `forum.effectivealtruism.org/graphql`. `{post(input:{selector:{documentId:"<id>"}}){result{title,htmlBody}}}` returns the post body as clean HTML — no nav, no footer, no comments. Called from a **sandboxed iframe** (see below); also as a `?query=` GET through the proxy chain, which works because these servers run Apollo with `csrfPrevention: false`
+- **GreaterWrong** — `www.greaterwrong.com` / `ea.greaterwrong.com`, a server-rendered mirror of the same forums, fetched through the CORS proxy chain as the fallback when `/graphql` can't be reached. `?comments=false&hide-nav-bars=true` strips the page down to the post itself
 - **Wiktionary / Wikipedia** — `en.wiktionary.org/api/rest_v1/page/definition/` and `en.wikipedia.org/api/rest_v1/page/summary/` (both CORS-enabled, fetched directly with 3 s timeouts) for the voice-triggered "explain \<term\>" lookup
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
@@ -492,6 +494,40 @@ archive routes lead because a WAF blocks the *publisher's* origin, not the
 archive's, so a snapshot is the likeliest thing to survive. When every route
 fails on a bot-walled host the toast names the host rather than claiming the
 content could not be extracted — nothing was ever fetched to extract.
+
+**A sandboxed iframe has a different origin than this page, and that is the whole
+trick for LessWrong.** ForumMagnum (LessWrong / Alignment Forum / EA Forum) sends
+`Access-Control-Allow-Origin` on `/graphql` only to its crosspost partner and to
+the opaque origin `"null"` — a deliberate, documented allowance for its
+customizable home page, which runs user code in a `srcdoc` frame. So a plain
+cross-origin fetch from this app is refused, while the identical fetch from an
+`<iframe sandbox="allow-scripts">` (no `allow-same-origin`, or the origin stops
+being opaque) is allowed. `fetchViaNullOriginFrame` builds that frame, fetches
+inside it, `postMessage`s the body back under a random token, and always removes
+the frame. Verified end-to-end in Chromium against a server replicating those
+CORS rules.
+
+The second half of the win is the network path: the request leaves the reader's
+own browser, so the WAF that hands every CORS proxy a challenge page never sees a
+datacenter IP.
+
+`parseForumMagnumUrl` pulls the post id out of `/posts/<id>/<slug>` or
+`/s/<seq>/p/<id>`, and the tiers are: null-origin-frame GraphQL, then a race
+between the same query as a proxied `?query=` GET and the **GreaterWrong** mirror
+(GraphQL starts 3 s ahead — its result is cleaner). Alignment Forum posts are
+mirrored from LessWrong under the same id and AF's own endpoint doesn't reliably
+return `htmlBody`, so AF URLs ask lesswrong.com first. GreaterWrong HTML is
+*sliced* at `.body-text.post-body` (falling back to `main.post`) before extraction
+— its comment tree lives outside `<main>` in `#comments`, and the title has to be
+read off `h1.post-title` because the sliced fragment carries no title metadata.
+
+**Route the proxied GraphQL call through `fetchHtmlViaProxies`, never a bare
+`fetch` loop.** A proxy will forward a compressed body without the matching
+`Content-Encoding` header, so `response.text()` hands back binary and `JSON.parse`
+then fails on every proxy in turn — indistinguishable from the site being down.
+That is what the shared fetcher's `decodeBody` exists for, and skipping it is what
+made this path look like it worked while returning nothing.
+
 
 ## Making Changes
 
