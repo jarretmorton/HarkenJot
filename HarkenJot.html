@@ -2471,6 +2471,13 @@
     };
     const nextReadStatus = (status) =>
       status === 'unread' ? 'inProgress' : status === 'inProgress' ? 'read' : 'unread';
+    // Lines within one source are joined with U+2028 LINE SEPARATOR rather than
+    // "\n" so a rich-text target (OneNote) treats them as soft breaks inside a
+    // single paragraph. A "\n" starts a new paragraph, which replaces — and so
+    // deletes — the bullet the user pasted into. Written as an escape sequence,
+    // never a raw character: U+2028 is a line terminator to pre-ES2019 parsers,
+    // and this file is transpiled by Babel Standalone in the browser.
+    const SOFT_BREAK = '\u2028';
     // Build the title line used in copy/export text. Includes the podcast series
     // (showName) before the episode title so pasted notes identify the show.
     const formatSourceHeader = (source) => {
@@ -3989,7 +3996,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.53.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.53.1</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -11424,23 +11431,17 @@
           return words.join(' ');
         };
 
-        let exportText = '';
-        let firstSource = true;
+        // Each source becomes one paragraph (so one bullet when pasted); its own
+        // lines are soft breaks within that paragraph.
+        const blocks = [];
 
         Object.entries(groupedSources).forEach(([date, dateSources]) => {
           dateSources.forEach(source => {
             const sourceNotes = getNotesForSource(source.id);
-
-            // Add blank line between sources (except before first)
-            if (!firstSource) {
-              exportText += '\n';
-            }
-            firstSource = false;
-
-            exportText += `${formatSourceHeader(source)}\n`;
+            const lines = [formatSourceHeader(source)];
 
             if (sourceNotes.length > 0) {
-              exportText += 'Notes:\n';
+              lines.push('Notes:');
               sourceNotes.forEach(note => {
                 let notePrefix = '';
                 if (note.timestamp !== undefined) {
@@ -11451,13 +11452,15 @@
                     : `"${getFirstThreeWords(note.context)}..."`;
                   notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
                 }
-                exportText += `- ${notePrefix}${note.text}\n`;
+                lines.push(`- ${notePrefix}${note.text}`);
               });
             }
+
+            blocks.push(lines.join(SOFT_BREAK));
           });
         });
 
-        navigator.clipboard.writeText(exportText);
+        navigator.clipboard.writeText(blocks.join('\n'));
       };
 
       const exportLibrary = () => {
@@ -11790,7 +11793,11 @@
           notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
         }
 
-        const noteText = `${formatSourceHeader(currentSource)}\nNotes:\n- ${notePrefix}${note.text}`;
+        const noteText = [
+          formatSourceHeader(currentSource),
+          'Notes:',
+          `- ${notePrefix}${note.text}`
+        ].join(SOFT_BREAK);
         navigator.clipboard.writeText(noteText);
         showToast('Note copied to clipboard');
       };
@@ -11804,10 +11811,10 @@
           return words.join(' ');
         };
 
-        let exportText = formatSourceHeader(currentSource);
+        const lines = [formatSourceHeader(currentSource)];
 
         if (notes.length > 0) {
-          exportText += `\nNotes:\n`;
+          lines.push('Notes:');
           notes.forEach(note => {
             let notePrefix = '';
             if (note.timestamp !== undefined) {
@@ -11818,11 +11825,11 @@
                 : `"${getFirstThreeWords(note.context)}..."`;
               notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
             }
-            exportText += `- ${notePrefix}${note.text}\n`;
+            lines.push(`- ${notePrefix}${note.text}`);
           });
         }
 
-        navigator.clipboard.writeText(exportText);
+        navigator.clipboard.writeText(lines.join(SOFT_BREAK));
         showToast(notes.length > 0 ? 'All notes copied to clipboard' : 'Title and link copied to clipboard');
       };
 
