@@ -3406,19 +3406,45 @@
 
       // Initialize silent audio for TTS (anchors the media session so Chrome shows
       // the lock-screen / notification controls while TTS is playing).
+      // Build a real-duration, digitally-silent WAV at runtime and serve it from a
+      // Blob URL, so a 30 s buffer costs no base64 bloat in this single file.
+      _buildAnchorWav: (seconds = 30, rate = 8000) => {
+        const frames = seconds * rate;
+        const buf = new ArrayBuffer(44 + frames * 2);
+        const view = new DataView(buf);
+        const ascii = (off, str) => {
+          for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+        };
+        ascii(0, 'RIFF');      view.setUint32(4, 36 + frames * 2, true);
+        ascii(8, 'WAVEfmt ');  view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);          // PCM
+        view.setUint16(22, 1, true);          // mono
+        view.setUint32(24, rate, true);
+        view.setUint32(28, rate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        ascii(36, 'data');     view.setUint32(40, frames * 2, true);
+        // Samples stay zero: silent, and the buffer is already allocated zeroed.
+        return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      },
+
       initSilentAudio: () => {
         if (MediaSessionManager.silentAudio) return MediaSessionManager.silentAudio;
 
-        // Use a zero-duration silent WAV that loops.
-        // Intentionally zero-duration: because it produces no real audio output,
-        // Android's AudioManager never registers it as an active audio stream.
-        // This means the TTS engine (speechSynthesis) can claim its own audio-focus
-        // slot without pausing this element — the two coexist without conflict.
-        // Chrome's media session still sees the element in "playing" state on each
-        // loop iteration and keeps the notification visible.
-        // A real WAV with non-zero duration DOES trigger AudioManager and gets
-        // paused the moment speechSynthesis speaks, killing the notification.
-        const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+        // A looping, real-duration silent WAV.
+        // It used to be zero-duration, on the theory that Android's AudioManager
+        // would then never see an active stream and TTS could hold audio focus
+        // alone. The cost was fatal to the transport: a zero-duration element
+        // cannot be paused (Chrome dismisses the notification — there is nothing
+        // to resume), so the anchor had to keep playing while TTS was paused.
+        // Chrome derives the notification's play/pause button from the element,
+        // not from setPlaybackState, so it saw a playing element and rendered
+        // "pause" forever — every press sent the `pause` action again and the
+        // `play` handler was never called. That is the "pause button does
+        // nothing" bug, on the phone and on Android Auto alike.
+        // Real duration means the anchor can be paused and resumed like any
+        // other media, which is what lets the button flip.
+        const audio = new Audio(MediaSessionManager._buildAnchorWav());
         audio.loop = true;
         audio.volume = 0.01; // Near-silent; must be > 0 or some browsers ignore it
         audio._intentionalPause = false;
@@ -3449,15 +3475,24 @@
             album: album || ''
           };
 
-          // Add artwork if provided
-          if (artwork) {
+          // Fall back to the app icon so paths with no artwork of their own —
+          // the reader, X videos — still get a card with something on it rather
+          // than a blank grey box on Android Auto. Resolved against the page so
+          // the URL is absolute, and skipped entirely if that fails (the icon
+          // PNGs ship alongside HarkenJot.html but nothing breaks without them).
+          let src = artwork;
+          if (!src) {
+            try { src = new URL('icon-android-512.png', location.href).href; }
+            catch (e) { src = null; }
+          }
+          if (src) {
             metadata.artwork = [
-              { src: artwork, sizes: '96x96', type: 'image/png' },
-              { src: artwork, sizes: '128x128', type: 'image/png' },
-              { src: artwork, sizes: '192x192', type: 'image/png' },
-              { src: artwork, sizes: '256x256', type: 'image/png' },
-              { src: artwork, sizes: '384x384', type: 'image/png' },
-              { src: artwork, sizes: '512x512', type: 'image/png' }
+              { src, sizes: '96x96', type: 'image/png' },
+              { src, sizes: '128x128', type: 'image/png' },
+              { src, sizes: '192x192', type: 'image/png' },
+              { src, sizes: '256x256', type: 'image/png' },
+              { src, sizes: '384x384', type: 'image/png' },
+              { src, sizes: '512x512', type: 'image/png' }
             ];
           }
 
@@ -3537,6 +3572,17 @@
             // Ignore errors when clearing
           }
         });
+      },
+
+      // Pause the anchor while keeping the notification alive. Sets
+      // _intentionalPause so the auto-recover listener doesn't undo it 50 ms
+      // later, and keeps currentTime so the element still has somewhere to
+      // resume from — that is what stops Chrome dismissing the card.
+      pauseSilentAudio: () => {
+        if (MediaSessionManager.silentAudio) {
+          MediaSessionManager.silentAudio._intentionalPause = true;
+          MediaSessionManager.silentAudio.pause();
+        }
       },
 
       // Stop silent audio (for TTS cleanup)
@@ -4004,7 +4050,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.54.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.55.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6765,29 +6811,33 @@
           const ttsStepBack = ttsStep(-1);
           const ttsStepForward = ttsStep(1);
 
+          // Resume from the current sentence. speechSynthesis.resume() is not
+          // usable on Android (see onPause), so this always re-speaks.
+          const ttsResume = () => {
+            if (isPlayingRef.current) return;
+            wasCancelledRef.current = false;
+            if (speakFromIndexRef.current) {
+              speakFromIndexRef.current(currentSentenceIndexRef.current);
+            }
+          };
+
           // Set up action handlers for TTS.
           // All handlers use refs to avoid stale closure issues — this effect only
           // re-runs when content/source changes, not on every isPlaying/index change.
           MediaSessionManager.setActionHandlers({
-            onPlay: () => {
-              if (window.speechSynthesis.paused) {
-                // Resume already-established synthesis. This works from a
-                // background media-session handler; starting *new* synthesis
-                // via speak() from background is blocked by Chrome's autoplay
-                // policy even from trusted media-session events.
-                wasCancelledRef.current = false; // allow onend to advance sentences
-                window.speechSynthesis.resume();
-                setIsPlaying(true);
-              } else if (!isPlayingRef.current && speakFromIndexRef.current) {
-                speakFromIndexRef.current(currentSentenceIndexRef.current);
-              }
-            },
+            onPlay: ttsResume,
+            // Chrome renders one button and sends the matching action. If it
+            // ever gets the state wrong and sends `pause` while we are already
+            // paused, treat it as the resume the user obviously meant rather
+            // than leaving them with a dead button.
             onPause: () => {
-              // Use pause() not cancel() so the utterance stays in the queue.
-              // resume() can then restart it without needing to call speak(),
-              // which is blocked from background media-session handlers.
+              if (!isPlayingRef.current) { ttsResume(); return; }
+              // cancel(), not pause(): on Chrome for Android pause() ends the
+              // utterance outright, so resume() is a no-op and speechSynthesis
+              // .paused stays false. Cancelling and re-speaking the sentence is
+              // the only thing that actually works there.
               wasCancelledRef.current = true;
-              window.speechSynthesis.pause();
+              window.speechSynthesis.cancel();
               setIsPlaying(false);
               releaseWakeLock();
             },
@@ -6824,10 +6874,10 @@
 
       // Manage silent audio for TTS media session.
       // Mirrors how podcast <audio> works: the browser derives the play/pause
-      // button state from the audio element itself — play() → pause button,
-      // setPlaybackState controls the play/pause button in the notification.
-      // The zero-duration audio must keep looping — pausing it causes Chrome
-      // to dismiss the notification entirely (duration=0, nothing to resume).
+      // button state from the audio element itself, NOT from setPlaybackState.
+      // So the anchor has to actually pause when TTS pauses — otherwise Chrome
+      // keeps rendering a pause button, every press sends the `pause` action
+      // again, and the `play` handler is never reached.
       useEffect(() => {
         if (!('mediaSession' in navigator)) return;
 
@@ -6837,9 +6887,10 @@
           silentAudio.play().catch(err => console.log('Silent audio play error:', err));
           MediaSessionManager.setPlaybackState('playing');
         } else if (content && MediaSessionManager.silentAudio) {
-          // Paused: keep the zero-duration audio looping (so the notification
-          // stays visible) and use setPlaybackState to flip the button to play.
-          // Do NOT call audio.pause() — that dismisses the notification.
+          // Paused: pause the anchor so the button flips to play. Safe now that
+          // the anchor has a real duration — it keeps its position, so there is
+          // something to resume and Chrome leaves the notification up.
+          MediaSessionManager.pauseSilentAudio();
           MediaSessionManager.setPlaybackState('paused');
         } else {
           // No content loaded: fully stop and dismiss notification
