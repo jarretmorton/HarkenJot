@@ -2451,8 +2451,27 @@
         }
       }
     };
-    const formatDate = (date) => new Date(date).toLocaleDateString('en-US', { 
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
+    // A shared link routinely points at a section rather than the top of a page
+    // — METR's study link ends in "#motivation". The fragment is a client-side
+    // anchor that no server ever receives, but it still travels into every route
+    // that takes the URL as *data* rather than fetching it: archive.org's
+    // availability API and archive.today both index fragment-free URLs, so a
+    // lookup carrying "#motivation" reports no snapshot and two fallback tiers
+    // are lost before they start. It also makes the saved source fail to match
+    // the same article linked without it, so the duplicate check misses. The
+    // reader renders extracted plain text with no anchors to jump to, so the
+    // fragment has no use here at all — drop it up front and let every tier
+    // work from one canonical URL.
+    const stripUrlFragment = (raw) => {
+      const trimmed = (raw || '').trim();
+      const hash = trimmed.indexOf('#');
+      // A leading "#" is not a URL with a fragment; leave it for the caller's
+      // own validation to reject rather than handing back an empty string.
+      return hash > 0 ? trimmed.slice(0, hash) : trimmed;
+    };
+
+    const formatDate = (date) => new Date(date).toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     });
     const formatTime = (seconds) => {
       const mins = Math.floor(seconds / 60);
@@ -4050,7 +4069,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.56.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.57.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5206,6 +5225,14 @@
           '.entry-content',
           '.story-body',
           '.story-content',
+          // Rendered-markdown wrappers. A modern static site or framework blog
+          // (METR's among them) has no CMS class to match on — the body is the
+          // one element carrying the typography plugin's class, which is exactly
+          // the article and none of the chrome around it.
+          '.prose',
+          '.post-body',
+          '.markdown-body',
+          '[itemprop="articleBody"]',
           'article',
           '[role="main"]',
           'main',
@@ -5319,7 +5346,56 @@
           }
           if (payload.length < 200) return '';
 
-          // 2. Walk the flight rows for prose. A React element serialises as
+          // 2. Split the payload into rows and keep them by id. Rows are
+          //    "<hex id>:<json>", sometimes with a type letter (I/H/E) between;
+          //    module and hint records never parse as JSON and are skipped. The
+          //    ids matter because a paragraph's text is frequently not inline but
+          //    a reference to another row, which step 3 has to follow.
+          const rowById = new Map();
+          const rows = [];
+
+          //    A "T" row is the exception: it carries raw text rather than JSON,
+          //    prefixed with its length in UTF-8 *bytes*, and that text may itself
+          //    contain newlines — so it has to be measured rather than split on,
+          //    or the row swallows every row after it. Walk code points counting
+          //    their encoded width.
+          const sliceByBytes = (str, start, byteLen) => {
+            let i = start, bytes = 0;
+            while (i < str.length && bytes < byteLen) {
+              const cp = str.codePointAt(i);
+              bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+              i += cp > 0xffff ? 2 : 1;
+            }
+            return { text: str.slice(start, i), end: i };
+          };
+
+          let pos = 0;
+          while (pos < payload.length) {
+            const nl = payload.indexOf('\n', pos);
+            const lineEnd = nl === -1 ? payload.length : nl;
+            const head = payload.slice(pos, Math.min(lineEnd, pos + 24));
+            const rowMatch = head.match(/^([0-9a-f]+):(T([0-9a-f]+),)?/);
+            if (!rowMatch) { pos = lineEnd + 1; continue; }
+
+            if (rowMatch[2]) {
+              const { text, end } = sliceByBytes(payload, pos + rowMatch[0].length, parseInt(rowMatch[3], 16));
+              rowById.set(rowMatch[1], text);
+              rows.push(text);
+              pos = payload.charCodeAt(end) === 10 ? end + 1 : end;
+              continue;
+            }
+
+            const body = payload.slice(pos + rowMatch[0].length, lineEnd).replace(/^[A-Za-z](?=[\[{"])/, '');
+            try {
+              const parsed = JSON.parse(body);
+              rowById.set(rowMatch[1], parsed);
+              rows.push(parsed);
+            } catch (e) { /* hint or module record, or a row still streaming */ }
+            pos = lineEnd + 1;
+          }
+          if (!rows.length) return '';
+
+          // 3. Walk the rows for prose. A React element serialises as
           //    ["$", tag, key, props], so anything whose tag is a block-level
           //    prose element is a paragraph and its descendant strings are its
           //    text. Layout wrappers and client-component references (tags like
@@ -5329,30 +5405,58 @@
           const blocks = [];
           const seen = new Set();
 
-          const collectStrings = (node, out, depth) => {
+          // Every flight string beginning with "$" is a marker, never text:
+          // "$L8"/"$8" point at another row, "$undefined" and "$Sreact.suspense"
+          // are sentinels, and a literal leading "$" is escaped by doubling it.
+          const ROW_REF = /^\$[L@]?([0-9a-f]+)$/;
+          const isElement = (n) => Array.isArray(n) && n[0] === '$' && typeof n[1] === 'string' && n.length >= 4;
+
+          const collectStrings = (node, out, depth, guard) => {
             if (node == null || depth > 40) return;
             if (typeof node === 'string') {
-              // "$L5", "$undefined", "$Sreact.suspense" — flight references, not text.
-              if (node.charCodeAt(0) === 36) return;
+              if (node.charCodeAt(0) === 36) {
+                // "$$4.2M" is the literal text "$4.2M"; dropping every "$…" string
+                // lost whole paragraphs that happened to open on a dollar amount.
+                if (node.charCodeAt(1) === 36) { out.push(node.slice(1)); return; }
+                // Streamed prose arrives as a reference to another row rather than
+                // inline, so follow it — guarding against a cyclic payload.
+                const ref = ROW_REF.exec(node);
+                if (ref && rowById.has(ref[1]) && !guard.has(node)) {
+                  guard.add(node);
+                  collectStrings(rowById.get(ref[1]), out, depth + 1, guard);
+                }
+                return;
+              }
               out.push(node);
               return;
             }
-            if (Array.isArray(node)) { for (const n of node) collectStrings(n, out, depth + 1); return; }
-            if (typeof node === 'object') { for (const n of Object.values(node)) collectStrings(n, out, depth + 1); }
+            if (Array.isArray(node)) {
+              // Only props.children of a nested element is text. Walking the
+              // element array itself splices the tag name and every prop value
+              // into the middle of the sentence, so a paragraph holding an inline
+              // link used to read "…the a/engineeringengineering team…".
+              if (isElement(node)) {
+                collectStrings(node[3] && node[3].children, out, depth + 1, guard);
+                return;
+              }
+              for (const n of node) collectStrings(n, out, depth + 1, guard);
+              return;
+            }
+            if (typeof node === 'object') { for (const n of Object.values(node)) collectStrings(n, out, depth + 1, guard); }
           };
 
           const visit = (node, depth) => {
             if (node == null || depth > 60 || typeof node !== 'object') return;
             if (Array.isArray(node)) {
-              if (node[0] === '$' && typeof node[1] === 'string' && node.length >= 4) {
+              if (isElement(node)) {
                 const tag = node[1].toLowerCase();
                 if (PROSE_TAGS.has(tag)) {
                   const parts = [];
-                  collectStrings(node[3] && node[3].children, parts, 0);
+                  collectStrings(node[3] && node[3].children, parts, 0, new Set());
                   const block = parts.join('').replace(/\s+/g, ' ').trim();
                   // The shell and the streamed segment often carry the same tree,
                   // which doubled the article before this dedupe.
-                  if (block && !seen.has(block)) { seen.add(block); blocks.push(block); }
+                  if (block && !seen.has(block)) { seen.add(block); blocks.push({ tag, text: block }); }
                   // Don't descend: a <p> inside an <li> is already counted above.
                   return;
                 }
@@ -5363,21 +5467,23 @@
             for (const n of Object.values(node)) visit(n, depth + 1);
           };
 
-          for (const line of payload.split('\n')) {
-            // Rows are "<hex id>:<json>", sometimes with a type letter (I/H/T/E)
-            // between. Non-JSON rows (module and hint records) never parse and
-            // are skipped.
-            const m = line.match(/^[0-9a-f]+:[A-Za-z]?([\[{].*)$/);
-            if (!m) continue;
-            try { visit(JSON.parse(m[1]), 0); } catch (e) { /* streamed/partial row */ }
-          }
+          for (const row of rows) visit(row, 0);
           if (!blocks.length) return '';
 
           // Menu labels and button text that slipped through as headings sit
-          // ahead of the story; start at the first block that reads as prose.
-          const first = blocks.findIndex(b => b.length >= 100 || /[.!?]["\u2019\u201d')\]]?$/.test(b));
+          // ahead of the story; start at the first block that reads as prose. The
+          // article's own headline is short and carries no terminal punctuation,
+          // so it looks exactly like one of those labels — but it is an <h1> and a
+          // nav label never is, so back up to the last <h1> ahead of the prose
+          // rather than opening the article mid-story.
+          let first = blocks.findIndex(b => b.text.length >= 100 || /[.!?]["’”')\]]?$/.test(b.text));
+          if (first > 0) {
+            for (let i = first - 1; i >= 0; i--) {
+              if (blocks[i].tag === 'h1') { first = i; break; }
+            }
+          }
           const kept = first > 0 ? blocks.slice(first) : blocks;
-          return cleanText(kept.join(' '));
+          return cleanText(kept.map(b => b.text).join(' '));
         };
 
         if (text.length < 900 && nextFlightChunks.length) {
@@ -5589,7 +5695,11 @@
         input.click();
       };
 
-      const fetchContent = async () => {
+      // Takes the URL as a parameter so the whole walk below — the duplicate
+      // check, the proxy chain, every fallback tier and the saved source — works
+      // from the one canonical string that fetchContent normalises, rather than
+      // each tier re-reading the raw input field.
+      const fetchArticleFromUrl = async (url) => {
         if (!url.trim()) return;
 
         // Bail out before any network work if this URL is already saved.
@@ -6698,12 +6808,18 @@
         setLoading(false);
       };
 
+      const fetchContent = () => fetchArticleFromUrl(stripUrlFragment(url));
+
       const handleManualSubmit = async () => {
         if (!manualContent.trim()) return;
 
+        // Same canonical form the fetch path saves, so a paste made after a
+        // failed "…#section" fetch still matches that article later.
+        const canonicalUrl = stripUrlFragment(url);
+
         // Only check when a URL is supplied — bare pasted text has no reliable
         // identity key, so we let it through.
-        if (url && url.trim() && !await checkDuplicateBeforeLoad({ url })) {
+        if (canonicalUrl && !await checkDuplicateBeforeLoad({ url: canonicalUrl })) {
           setUrl('');
           setShowManualInput(false);
           setManualContent('');
@@ -6715,8 +6831,8 @@
 
         addSource({
           type: 'article',
-          title: url || 'Pasted Content',
-          url: url || null,
+          title: canonicalUrl || 'Pasted Content',
+          url: canonicalUrl || null,
           content: manualContent
         });
 

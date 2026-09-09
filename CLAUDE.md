@@ -157,7 +157,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 2301 | `#app-source` script block opens (all JSX below lives here) |
 | 2302 | React hooks imports |
 | 2305–2352 | `Icons` — SVG icon components |
-| 2353–2698 | Utility functions (`generateId`, `safeHostname`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 2353–2698 | Utility functions (`generateId`, `safeHostname`, `stripUrlFragment`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
 | 2699–2956 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
 | 2785–2793 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
 | 2958–3021 | `Toast` — Notification component with undo support |
@@ -495,6 +495,49 @@ DOM strategies worked they have already isolated the article, whereas the flight
 payload is the *whole page* — letting it compete on length would trade a clean
 extraction for one with the footer welded on. Do not remove that gate to "catch
 more"; it is what keeps the decoder from regressing every App Router site.
+
+**In the flight format, only `props.children` is text.** A React element is
+`["$", tag, key, props]`, so walking that array as if it were a list of children
+splices the tag name *and every prop value* into the middle of the sentence — a
+paragraph with one inline link came out as "…the a/engineeringengineering
+team…", which is what these pages are full of. Three more rules the format
+imposes, each of which silently dropped or corrupted prose before:
+
+- **A string starting with `$` is a marker, never text.** `"$L8"`/`"$8"` point at
+  another row, `"$undefined"` and `"$Sreact.suspense"` are sentinels, and a
+  literal leading `$` is escaped by **doubling** it — so `"$$4.2M"` is the text
+  `"$4.2M"`, and blanket-dropping every `"$…"` string lost whole paragraphs that
+  opened on a dollar amount.
+- **Streamed prose is a reference, not inline.** A `<p>` whose `children` is
+  `"$L7"` has its text in row 7, so the rows are kept by id and references are
+  followed (guarded against cycles). Without that the paragraph decodes empty.
+- **A `T` row is raw text, not JSON**, prefixed with its length in UTF-8
+  **bytes** — and that text may contain newlines. It has to be measured by
+  encoded width rather than split on `\n`, or the row swallows every row after
+  it. This is why the payload is walked with a cursor instead of
+  `payload.split('\n')`.
+
+The article's own `<h1>` is short and has no terminal punctuation, so the
+leading-furniture trim treated it exactly like a nav label and opened the
+article mid-story. The trim now backs up to the last `<h1>` ahead of the first
+prose block — a menu label is never an `h1`, so this costs nothing.
+
+**A fragment is not part of the URL for anything downstream.** Shared links
+routinely point at a section (METR's study link ends in `#motivation`). No server
+ever receives the fragment, but it travels into every route that treats the URL
+as *data*: `archive.org/wayback/available` and archive.today both index
+fragment-free URLs and report **no snapshot** for one carrying `#motivation`, so
+two fallback tiers were lost before they started, and the saved source never
+matched the same article linked without it. `stripUrlFragment` canonicalises once
+up front and `fetchContent` hands the result to `fetchArticleFromUrl`, so every
+tier — and the saved source — works from one string. The reader renders extracted
+plain text with no anchors to jump to, so nothing wants the fragment back.
+
+Rendered-markdown wrappers (`.prose` from Tailwind Typography, `.post-body`,
+`.markdown-body`, `[itemprop="articleBody"]`) sit in the content-selector list
+ahead of `article`/`main`. A framework or static-site blog (METR's among them)
+has no CMS class to match on; the typography wrapper is the one element that is
+the article and none of the chrome around it.
 
 **Page furniture is not the article.** Jina returns the whole rendered page as
 markdown, and an archive capture carries the publisher's masthead (plus, without
