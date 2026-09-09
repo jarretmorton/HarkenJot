@@ -475,6 +475,27 @@ and `archive.is` through `raceStaggered` (both are front doors onto the same
 archive) instead of trying them serially, where a dead first mirror cost a whole
 proxy chain before the second one started.
 
+**The article is not always in the DOM.** `extractArticleContent` reads two
+Next.js shapes, and they are not interchangeable. Pages Router sites (Forbes)
+carry a single `script#__NEXT_DATA__` JSON blob. **App Router** sites (Next 13+,
+including `anthropic.com` and `claude.com`) have no such blob — the server
+streams the React tree as an RSC flight payload chunked across
+`self.__next_f.push([1,"…"])` calls, so the article text sits in `<script>`
+elements that the cleanup pass deletes before any DOM strategy sees them. The
+chunk sources are therefore stashed *before* removal and decoded in Strategy D2:
+concatenate the chunks, `JSON.parse` each to unescape, split the payload into
+`<hex id>:<json>` rows, and walk each row for React elements (`["$", tag, key,
+props]`) whose tag is block-level prose. Layout wrappers and client-component
+references (tags like `"$L5"`) never match, which keeps nav and footer markup out
+without a furniture heuristic; identical blocks are deduped because the shell and
+the streamed segment often carry the same tree.
+
+Decoding is **deliberately gated on a thin (<900 char) DOM result**. Where the
+DOM strategies worked they have already isolated the article, whereas the flight
+payload is the *whole page* — letting it compete on length would trade a clean
+extraction for one with the footer welded on. Do not remove that gate to "catch
+more"; it is what keeps the decoder from regressing every App Router site.
+
 **Page furniture is not the article.** Jina returns the whole rendered page as
 markdown, and an archive capture carries the publisher's masthead (plus, without
 `id_`, Wayback's own toolbar). Unwrapping links and collapsing whitespace in one

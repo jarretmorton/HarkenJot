@@ -4050,7 +4050,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.55.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.56.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -5080,6 +5080,20 @@
         let structuredTitle = null;
         let structuredText = null;
 
+        // Next.js App Router (13+) has no __NEXT_DATA__ blob. It streams the page
+        // as an RSC flight payload split across `self.__next_f.push([1,"…"])`
+        // chunks, so the article text lives in <script> elements that the cleanup
+        // below deletes before any DOM strategy ever sees them. Stash the raw
+        // chunk sources now; they are only decoded further down, and only if the
+        // DOM strategies come back thin.
+        const nextFlightChunks = [];
+        try {
+          doc.querySelectorAll('script').forEach(el => {
+            const src = el.textContent;
+            if (src && src.includes('__next_f')) nextFlightChunks.push(src);
+          });
+        } catch (e) { /* no flight payload on this page */ }
+
         // Try JSON-LD (used by Forbes, NYT, WaPo, and many news sites)
         try {
           const jsonLdScripts = doc.querySelectorAll('script[type="application/ld+json"]');
@@ -5274,6 +5288,108 @@
           console.log('All DOM strategies insufficient, falling back to body text');
           const bodyText = cleanText(doc.body.textContent);
           if (bodyText.length > text.length) text = bodyText;
+        }
+
+        // Strategy D2: Next.js App Router RSC flight payload.
+        //
+        // On an App Router page the server streams the React tree as a flight
+        // payload chunked across `self.__next_f.push([1,"<escaped>"])` calls.
+        // Concatenated and unescaped, those chunks hold every text node on the
+        // page — which is the only copy of the article left when the DOM
+        // strategies find nothing but layout wrappers, and the reason a site
+        // built this way could look unfetchable even though the proxy returned
+        // the whole story.
+        //
+        // Deliberately gated on a thin DOM result. On a page where the DOM
+        // strategies worked, they have already isolated the article; the flight
+        // payload is the *whole page*, so letting it compete on length would
+        // trade a clean extraction for one with the footer welded on.
+        const decodeNextFlight = () => {
+          // 1. Reassemble the payload. Each push carries one JS string literal;
+          //    JSON.parse unescapes it. A chunk that fails to parse is skipped
+          //    rather than abandoning the rest — the stream is still readable.
+          let payload = '';
+          const chunkRe = /__next_f\.push\(\s*\[\s*\d+\s*,\s*("(?:[^"\\]|\\[\s\S])*")/g;
+          for (const src of nextFlightChunks) {
+            chunkRe.lastIndex = 0;
+            let m;
+            while ((m = chunkRe.exec(src))) {
+              try { payload += JSON.parse(m[1]); } catch (e) { /* skip torn chunk */ }
+            }
+          }
+          if (payload.length < 200) return '';
+
+          // 2. Walk the flight rows for prose. A React element serialises as
+          //    ["$", tag, key, props], so anything whose tag is a block-level
+          //    prose element is a paragraph and its descendant strings are its
+          //    text. Layout wrappers and client-component references (tags like
+          //    "$L5") simply never match, which is what keeps nav and footer
+          //    markup out without a furniture heuristic.
+          const PROSE_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'li']);
+          const blocks = [];
+          const seen = new Set();
+
+          const collectStrings = (node, out, depth) => {
+            if (node == null || depth > 40) return;
+            if (typeof node === 'string') {
+              // "$L5", "$undefined", "$Sreact.suspense" — flight references, not text.
+              if (node.charCodeAt(0) === 36) return;
+              out.push(node);
+              return;
+            }
+            if (Array.isArray(node)) { for (const n of node) collectStrings(n, out, depth + 1); return; }
+            if (typeof node === 'object') { for (const n of Object.values(node)) collectStrings(n, out, depth + 1); }
+          };
+
+          const visit = (node, depth) => {
+            if (node == null || depth > 60 || typeof node !== 'object') return;
+            if (Array.isArray(node)) {
+              if (node[0] === '$' && typeof node[1] === 'string' && node.length >= 4) {
+                const tag = node[1].toLowerCase();
+                if (PROSE_TAGS.has(tag)) {
+                  const parts = [];
+                  collectStrings(node[3] && node[3].children, parts, 0);
+                  const block = parts.join('').replace(/\s+/g, ' ').trim();
+                  // The shell and the streamed segment often carry the same tree,
+                  // which doubled the article before this dedupe.
+                  if (block && !seen.has(block)) { seen.add(block); blocks.push(block); }
+                  // Don't descend: a <p> inside an <li> is already counted above.
+                  return;
+                }
+              }
+              for (const n of node) visit(n, depth + 1);
+              return;
+            }
+            for (const n of Object.values(node)) visit(n, depth + 1);
+          };
+
+          for (const line of payload.split('\n')) {
+            // Rows are "<hex id>:<json>", sometimes with a type letter (I/H/T/E)
+            // between. Non-JSON rows (module and hint records) never parse and
+            // are skipped.
+            const m = line.match(/^[0-9a-f]+:[A-Za-z]?([\[{].*)$/);
+            if (!m) continue;
+            try { visit(JSON.parse(m[1]), 0); } catch (e) { /* streamed/partial row */ }
+          }
+          if (!blocks.length) return '';
+
+          // Menu labels and button text that slipped through as headings sit
+          // ahead of the story; start at the first block that reads as prose.
+          const first = blocks.findIndex(b => b.length >= 100 || /[.!?]["\u2019\u201d')\]]?$/.test(b));
+          const kept = first > 0 ? blocks.slice(first) : blocks;
+          return cleanText(kept.join(' '));
+        };
+
+        if (text.length < 900 && nextFlightChunks.length) {
+          try {
+            const flightText = decodeNextFlight();
+            if (flightText.length > text.length) {
+              console.log('Next.js App Router flight payload found better content:', flightText.length, 'chars vs', text.length, 'from DOM');
+              text = flightText;
+            }
+          } catch (e) {
+            console.log('Flight payload decode failed:', e?.message || e);
+          }
         }
 
         // Strategy E: structured data (JSON-LD articleBody / __NEXT_DATA__).
