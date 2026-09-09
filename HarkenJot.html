@@ -3406,19 +3406,45 @@
 
       // Initialize silent audio for TTS (anchors the media session so Chrome shows
       // the lock-screen / notification controls while TTS is playing).
+      // Build a real-duration, digitally-silent WAV at runtime and serve it from a
+      // Blob URL, so a 30 s buffer costs no base64 bloat in this single file.
+      _buildAnchorWav: (seconds = 30, rate = 8000) => {
+        const frames = seconds * rate;
+        const buf = new ArrayBuffer(44 + frames * 2);
+        const view = new DataView(buf);
+        const ascii = (off, str) => {
+          for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+        };
+        ascii(0, 'RIFF');      view.setUint32(4, 36 + frames * 2, true);
+        ascii(8, 'WAVEfmt ');  view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);          // PCM
+        view.setUint16(22, 1, true);          // mono
+        view.setUint32(24, rate, true);
+        view.setUint32(28, rate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        ascii(36, 'data');     view.setUint32(40, frames * 2, true);
+        // Samples stay zero: silent, and the buffer is already allocated zeroed.
+        return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      },
+
       initSilentAudio: () => {
         if (MediaSessionManager.silentAudio) return MediaSessionManager.silentAudio;
 
-        // Use a zero-duration silent WAV that loops.
-        // Intentionally zero-duration: because it produces no real audio output,
-        // Android's AudioManager never registers it as an active audio stream.
-        // This means the TTS engine (speechSynthesis) can claim its own audio-focus
-        // slot without pausing this element — the two coexist without conflict.
-        // Chrome's media session still sees the element in "playing" state on each
-        // loop iteration and keeps the notification visible.
-        // A real WAV with non-zero duration DOES trigger AudioManager and gets
-        // paused the moment speechSynthesis speaks, killing the notification.
-        const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+        // A looping, real-duration silent WAV.
+        // It used to be zero-duration, on the theory that Android's AudioManager
+        // would then never see an active stream and TTS could hold audio focus
+        // alone. The cost was fatal to the transport: a zero-duration element
+        // cannot be paused (Chrome dismisses the notification — there is nothing
+        // to resume), so the anchor had to keep playing while TTS was paused.
+        // Chrome derives the notification's play/pause button from the element,
+        // not from setPlaybackState, so it saw a playing element and rendered
+        // "pause" forever — every press sent the `pause` action again and the
+        // `play` handler was never called. That is the "pause button does
+        // nothing" bug, on the phone and on Android Auto alike.
+        // Real duration means the anchor can be paused and resumed like any
+        // other media, which is what lets the button flip.
+        const audio = new Audio(MediaSessionManager._buildAnchorWav());
         audio.loop = true;
         audio.volume = 0.01; // Near-silent; must be > 0 or some browsers ignore it
         audio._intentionalPause = false;
@@ -3449,15 +3475,24 @@
             album: album || ''
           };
 
-          // Add artwork if provided
-          if (artwork) {
+          // Fall back to the app icon so paths with no artwork of their own —
+          // the reader, X videos — still get a card with something on it rather
+          // than a blank grey box on Android Auto. Resolved against the page so
+          // the URL is absolute, and skipped entirely if that fails (the icon
+          // PNGs ship alongside HarkenJot.html but nothing breaks without them).
+          let src = artwork;
+          if (!src) {
+            try { src = new URL('icon-android-512.png', location.href).href; }
+            catch (e) { src = null; }
+          }
+          if (src) {
             metadata.artwork = [
-              { src: artwork, sizes: '96x96', type: 'image/png' },
-              { src: artwork, sizes: '128x128', type: 'image/png' },
-              { src: artwork, sizes: '192x192', type: 'image/png' },
-              { src: artwork, sizes: '256x256', type: 'image/png' },
-              { src: artwork, sizes: '384x384', type: 'image/png' },
-              { src: artwork, sizes: '512x512', type: 'image/png' }
+              { src, sizes: '96x96', type: 'image/png' },
+              { src, sizes: '128x128', type: 'image/png' },
+              { src, sizes: '192x192', type: 'image/png' },
+              { src, sizes: '256x256', type: 'image/png' },
+              { src, sizes: '384x384', type: 'image/png' },
+              { src, sizes: '512x512', type: 'image/png' }
             ];
           }
 
@@ -3477,15 +3512,23 @@
         }
       },
 
-      // Set position state for seekable media
+      // Set position state for seekable media.
+      // A playbackRate of 0 is invalid per the Media Session spec and throws, so
+      // callers must not use it to mean "paused" — say that with setPlaybackState
+      // ('paused' is what stops the browser interpolating the progress bar). This
+      // guard used to be `playbackRate || 1`, which silently rewrote a caller's 0
+      // to 1 and so reported the position advancing while playback was paused.
       setPositionState: ({ duration, position, playbackRate }) => {
         if (!('mediaSession' in navigator)) return;
         try {
           if (duration && isFinite(duration) && duration > 0) {
+            const rate = (typeof playbackRate === 'number' && isFinite(playbackRate) && playbackRate > 0)
+              ? playbackRate
+              : 1;
             navigator.mediaSession.setPositionState({
               duration: duration,
               position: Math.min(position || 0, duration),
-              playbackRate: playbackRate || 1
+              playbackRate: rate
             });
           }
         } catch (err) {
@@ -3529,6 +3572,17 @@
             // Ignore errors when clearing
           }
         });
+      },
+
+      // Pause the anchor while keeping the notification alive. Sets
+      // _intentionalPause so the auto-recover listener doesn't undo it 50 ms
+      // later, and keeps currentTime so the element still has somewhere to
+      // resume from — that is what stops Chrome dismissing the card.
+      pauseSilentAudio: () => {
+        if (MediaSessionManager.silentAudio) {
+          MediaSessionManager.silentAudio._intentionalPause = true;
+          MediaSessionManager.silentAudio.pause();
+        }
       },
 
       // Stop silent audio (for TTS cleanup)
@@ -3996,7 +4050,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.53.1</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.55.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6737,63 +6791,66 @@
         if (!('mediaSession' in navigator)) return;
 
         if (content && currentSource) {
+          // There is no timeline to seek in TTS, so map skipping to sentence steps.
+          // Registered as BOTH seek and track actions: Android Auto's transport
+          // renders skip-to-previous/next and ignores rewind/fast-forward, so seek
+          // alone produced a card with only a pause button.
+          // Ref-based like the handlers below: this effect doesn't re-run per
+          // sentence, so a closure over currentSentenceIndex would go stale.
+          const ttsStep = (delta) => () => {
+            const idx = currentSentenceIndexRef.current;
+            const next = idx + delta;
+            if (next < 0 || next > sentencesRef.current.length - 1) return;
+            wasCancelledRef.current = true;
+            window.speechSynthesis.cancel();
+            setCurrentSentenceIndex(next);
+            if (isPlayingRef.current && speakFromIndexRef.current) {
+              setTimeout(() => speakFromIndexRef.current(next), 50);
+            }
+          };
+          const ttsStepBack = ttsStep(-1);
+          const ttsStepForward = ttsStep(1);
+
+          // Resume from the current sentence. speechSynthesis.resume() is not
+          // usable on Android (see onPause), so this always re-speaks.
+          const ttsResume = () => {
+            if (isPlayingRef.current) return;
+            wasCancelledRef.current = false;
+            if (speakFromIndexRef.current) {
+              speakFromIndexRef.current(currentSentenceIndexRef.current);
+            }
+          };
+
           // Set up action handlers for TTS.
           // All handlers use refs to avoid stale closure issues — this effect only
           // re-runs when content/source changes, not on every isPlaying/index change.
           MediaSessionManager.setActionHandlers({
-            onPlay: () => {
-              if (window.speechSynthesis.paused) {
-                // Resume already-established synthesis. This works from a
-                // background media-session handler; starting *new* synthesis
-                // via speak() from background is blocked by Chrome's autoplay
-                // policy even from trusted media-session events.
-                wasCancelledRef.current = false; // allow onend to advance sentences
-                window.speechSynthesis.resume();
-                setIsPlaying(true);
-              } else if (!isPlayingRef.current && speakFromIndexRef.current) {
-                speakFromIndexRef.current(currentSentenceIndexRef.current);
-              }
-            },
+            onPlay: ttsResume,
+            // Chrome renders one button and sends the matching action. If it
+            // ever gets the state wrong and sends `pause` while we are already
+            // paused, treat it as the resume the user obviously meant rather
+            // than leaving them with a dead button.
             onPause: () => {
-              // Use pause() not cancel() so the utterance stays in the queue.
-              // resume() can then restart it without needing to call speak(),
-              // which is blocked from background media-session handlers.
+              if (!isPlayingRef.current) { ttsResume(); return; }
+              // cancel(), not pause(): on Chrome for Android pause() ends the
+              // utterance outright, so resume() is a no-op and speechSynthesis
+              // .paused stays false. Cancelling and re-speaking the sentence is
+              // the only thing that actually works there.
               wasCancelledRef.current = true;
-              window.speechSynthesis.pause();
+              window.speechSynthesis.cancel();
               setIsPlaying(false);
               releaseWakeLock();
             },
-            // There is no timeline to seek in TTS, so map seek to sentence steps.
-            // Ref-based like the handlers above: this effect doesn't re-run per
-            // sentence, so a closure over currentSentenceIndex would go stale.
-            onSeekBackward: () => {
-              const idx = currentSentenceIndexRef.current;
-              if (idx <= 0) return;
-              wasCancelledRef.current = true;
-              window.speechSynthesis.cancel();
-              setCurrentSentenceIndex(idx - 1);
-              if (isPlayingRef.current && speakFromIndexRef.current) {
-                setTimeout(() => speakFromIndexRef.current(idx - 1), 50);
-              }
-            },
-            onSeekForward: () => {
-              const idx = currentSentenceIndexRef.current;
-              if (idx >= sentencesRef.current.length - 1) return;
-              wasCancelledRef.current = true;
-              window.speechSynthesis.cancel();
-              setCurrentSentenceIndex(idx + 1);
-              if (isPlayingRef.current && speakFromIndexRef.current) {
-                setTimeout(() => speakFromIndexRef.current(idx + 1), 50);
-              }
-            },
+            onSeekBackward: ttsStepBack,
+            onSeekForward: ttsStepForward,
+            onPreviousTrack: ttsStepBack,
+            onNextTrack: ttsStepForward,
             onStop: () => {
               wasCancelledRef.current = true;
               window.speechSynthesis.cancel();
               setIsPlaying(false);
               releaseWakeLock();
-            },
-            onPreviousTrack: null,
-            onNextTrack: null
+            }
           });
 
           // Set metadata
@@ -6817,10 +6874,10 @@
 
       // Manage silent audio for TTS media session.
       // Mirrors how podcast <audio> works: the browser derives the play/pause
-      // button state from the audio element itself — play() → pause button,
-      // setPlaybackState controls the play/pause button in the notification.
-      // The zero-duration audio must keep looping — pausing it causes Chrome
-      // to dismiss the notification entirely (duration=0, nothing to resume).
+      // button state from the audio element itself, NOT from setPlaybackState.
+      // So the anchor has to actually pause when TTS pauses — otherwise Chrome
+      // keeps rendering a pause button, every press sends the `pause` action
+      // again, and the `play` handler is never reached.
       useEffect(() => {
         if (!('mediaSession' in navigator)) return;
 
@@ -6830,9 +6887,10 @@
           silentAudio.play().catch(err => console.log('Silent audio play error:', err));
           MediaSessionManager.setPlaybackState('playing');
         } else if (content && MediaSessionManager.silentAudio) {
-          // Paused: keep the zero-duration audio looping (so the notification
-          // stays visible) and use setPlaybackState to flip the button to play.
-          // Do NOT call audio.pause() — that dismisses the notification.
+          // Paused: pause the anchor so the button flips to play. Safe now that
+          // the anchor has a real duration — it keeps its position, so there is
+          // something to resume and Chrome leaves the notification up.
+          MediaSessionManager.pauseSilentAudio();
           MediaSessionManager.setPlaybackState('paused');
         } else {
           // No content loaded: fully stop and dismiss notification
@@ -6856,9 +6914,10 @@
         MediaSessionManager.setPositionState({
           duration: estimatedDuration,
           position: estimatedPosition,
-          // Use 0 when paused so the browser stops interpolating the progress
-          // bar forward and doesn't override playbackState with 'playing'.
-          playbackRate: isPlaying ? speed : 0
+          // Always a real rate — 0 is invalid and was being coerced back to 1
+          // anyway. setPlaybackState('paused') is what stops the browser
+          // interpolating the progress bar forward.
+          playbackRate: speed
         });
       }, [currentSentenceIndex, content, speed, isPlaying]);
 
@@ -8016,19 +8075,27 @@
         // Set up action handlers based on current media type
         if (podcastAudio) {
           // Podcast: Use HTML5 audio element
+          // Same 15s as the on-screen transport buttons, so the car and the app
+          // agree on what a skip means. Registered as BOTH seek and track actions:
+          // Android Auto's transport renders skip-to-previous/next and ignores
+          // rewind/fast-forward, so seek alone produced a card with only a pause
+          // button. There is no queue to skip through, so prev/next has no other
+          // meaning here.
+          const podcastSkipBack = (details) => {
+            const el = audioPlayerRef.current;
+            if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
+          };
+          const podcastSkipForward = (details) => {
+            const el = audioPlayerRef.current;
+            if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
+          };
           MediaSessionManager.setActionHandlers({
             onPlay: () => audioPlayerRef.current?.play(),
             onPause: () => audioPlayerRef.current?.pause(),
-            // Same 15s as the on-screen transport buttons, so the car and the app
-            // agree on what a skip means.
-            onSeekBackward: (details) => {
-              const el = audioPlayerRef.current;
-              if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
-            },
-            onSeekForward: (details) => {
-              const el = audioPlayerRef.current;
-              if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
-            },
+            onSeekBackward: podcastSkipBack,
+            onSeekForward: podcastSkipForward,
+            onPreviousTrack: podcastSkipBack,
+            onNextTrack: podcastSkipForward,
             onSeekTo: (details) => {
               const el = audioPlayerRef.current;
               if (!el || details?.seekTime == null) return;
@@ -8038,9 +8105,7 @@
             onStop: () => {
               const el = audioPlayerRef.current;
               if (el) { el.pause(); el.currentTime = 0; }
-            },
-            onPreviousTrack: null,
-            onNextTrack: null
+            }
           });
 
           // Set metadata
@@ -8052,17 +8117,21 @@
           });
         } else if (videoId && playerRef.current) {
           // YouTube: Use YouTube player
+          const ytSkipBack = (details) => {
+            const pl = playerRef.current;
+            if (pl?.seekTo) pl.seekTo(Math.max(0, pl.getCurrentTime() - (details?.seekOffset || 15)), true);
+          };
+          const ytSkipForward = (details) => {
+            const pl = playerRef.current;
+            if (pl?.seekTo) pl.seekTo(pl.getCurrentTime() + (details?.seekOffset || 15), true);
+          };
           MediaSessionManager.setActionHandlers({
             onPlay: () => playerRef.current?.playVideo(),
             onPause: () => playerRef.current?.pauseVideo(),
-            onSeekBackward: (details) => {
-              const pl = playerRef.current;
-              if (pl?.seekTo) pl.seekTo(Math.max(0, pl.getCurrentTime() - (details?.seekOffset || 15)), true);
-            },
-            onSeekForward: (details) => {
-              const pl = playerRef.current;
-              if (pl?.seekTo) pl.seekTo(pl.getCurrentTime() + (details?.seekOffset || 15), true);
-            },
+            onSeekBackward: ytSkipBack,
+            onSeekForward: ytSkipForward,
+            onPreviousTrack: ytSkipBack,
+            onNextTrack: ytSkipForward,
             onSeekTo: (details) => {
               const pl = playerRef.current;
               if (pl?.seekTo && details?.seekTime != null) pl.seekTo(details.seekTime, true);
@@ -8070,9 +8139,7 @@
             onStop: () => {
               const pl = playerRef.current;
               if (pl?.pauseVideo) { pl.pauseVideo(); if (pl.seekTo) pl.seekTo(0, true); }
-            },
-            onPreviousTrack: null,
-            onNextTrack: null
+            }
           });
 
           // Set metadata for YouTube
@@ -8084,7 +8151,16 @@
           });
         } else if (xVideo) {
           // X.com: control the native <video> element when we have an MP4,
-          // otherwise fall back to timer-based state for iframe embeds
+          // otherwise fall back to timer-based state for iframe embeds.
+          // Only the MP4 path is seekable; the iframe embed offers no handle.
+          const xSkipBack = (details) => {
+            const el = videoPlayerRef.current;
+            if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
+          };
+          const xSkipForward = (details) => {
+            const el = videoPlayerRef.current;
+            if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
+          };
           MediaSessionManager.setActionHandlers({
             onPlay: () => {
               if (videoPlayerRef.current) videoPlayerRef.current.play();
@@ -8094,15 +8170,10 @@
               if (videoPlayerRef.current) videoPlayerRef.current.pause();
               else { setIsPlaying(false); releaseWakeLock(); }
             },
-            // Only the MP4 path is seekable; the iframe embed offers no handle.
-            onSeekBackward: (details) => {
-              const el = videoPlayerRef.current;
-              if (el) el.currentTime = Math.max(0, el.currentTime - (details?.seekOffset || 15));
-            },
-            onSeekForward: (details) => {
-              const el = videoPlayerRef.current;
-              if (el) el.currentTime = Math.min(el.duration || Infinity, el.currentTime + (details?.seekOffset || 15));
-            },
+            onSeekBackward: xSkipBack,
+            onSeekForward: xSkipForward,
+            onPreviousTrack: xSkipBack,
+            onNextTrack: xSkipForward,
             onSeekTo: (details) => {
               const el = videoPlayerRef.current;
               if (!el || details?.seekTime == null) return;
@@ -8113,9 +8184,7 @@
               const el = videoPlayerRef.current;
               if (el) { el.pause(); el.currentTime = 0; }
               else { setIsPlaying(false); releaseWakeLock(); }
-            },
-            onPreviousTrack: null,
-            onNextTrack: null
+            }
           });
 
           MediaSessionManager.setMetadata({

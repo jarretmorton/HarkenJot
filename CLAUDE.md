@@ -253,15 +253,25 @@ media-session anchor) is tuned around. Plain `element.volume` is the non-disrupt
 below the phone's current media volume but never exceed it. Set the phone's media volume
 high once, then trim in-app.
 
-**Why this exists — do not "fix" it by chasing the car's volume knob again.** On Android
-Auto the knob adjusts the media app Android Auto has *selected*, which must register a
-`MediaBrowserService` and appear in AA's app list. Chrome is not such an app and a browser
-tab can never become one, so the knob cannot reach this app no matter what the page does.
-This was confirmed on-device: the phone's own volume buttons control HarkenJot correctly on
-the "Media" stream for every source type (so audio focus and stream type are fine), the AA
-screen shows the last selected media app rather than HarkenJot, and turning the knob does
-not interrupt playback. Bluetooth A2DP was ruled out too — media audio is disabled on both
-ends, so the audio travels over the AA link. The in-app buttons are the fix that works.
+**Why this exists.** These buttons were built when the car's own volume knob could not
+reach the app at all. **That has since changed — the knob now works** — but the in-app
+control still earns its place: it works in the browser and away from Android Auto, and it
+trims below the device media volume.
+
+The history is worth keeping, because it rules out the things a future investigation would
+otherwise re-test. Audio focus and stream type were never the problem: the phone's own
+volume buttons have always controlled HarkenJot correctly on the "Media" stream, for every
+source type. Bluetooth A2DP was ruled out too — media audio is disabled on both ends, so
+the audio travels over the Android Auto link. What was actually happening is that Android
+Auto bound its knob to the media app *it* had selected — one registering a
+`MediaBrowserService` and appearing in AA's app list, which a browser tab cannot be — so the
+AA screen showed the last selected media app rather than HarkenJot and the knob adjusted
+that instead. Android Auto's multi-card dashboard rollout (17.2) changed this: AA now
+surfaces Chrome's media session as its own card, and the knob reaches the app.
+
+The lesson to carry forward is not "the knob can never work" — that framing was wrong — but
+that this surface is owned by Android Auto and Chrome, and can change under the app without
+any code change on our side. Re-test before assuming either way.
 
 ### Speech Recognition
 
