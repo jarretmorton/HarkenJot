@@ -10,7 +10,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 
 - **Voice Notes** — Record voice notes with automatic speech-to-text via Web Speech API (primary) or Whisper AI (offline fallback)
 - **Voice-Triggered Lookup** — Start a voice note with "explain \<term\>" to look it up on Wiktionary/Wikipedia; the answer is saved as a Q&A note at your current position and read aloud before playback resumes
-- **Multiple Content Types** — Load articles, PDFs, YouTube videos, podcasts, X.com/Twitter videos, X.com posts/articles, and local audio files in a single interface
+- **Multiple Content Types** — Load articles, PDFs, GitHub READMEs, YouTube videos, podcasts, X.com/Twitter videos, X.com posts/articles, and local audio files in a single interface
 - **Gemini Notebook Integration** (formerly NotebookLM) — Play Gemini Notebook podcast exports as local audio, link them back to their notebook URL, and jump to Gemini Notebook from any article
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
@@ -53,7 +53,7 @@ HarkenJot has three main views:
 
 | Tab | Purpose |
 |-----|---------|
-| **Reader** | Load articles or X.com posts/Articles (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
+| **Reader** | Load articles, X.com posts/Articles or GitHub READMEs (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
 | **Media** | Play YouTube videos, podcasts (via RSS/audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
 

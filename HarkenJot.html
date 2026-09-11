@@ -3254,6 +3254,309 @@
       } catch { return null; }
     };
 
+    // GitHub hands out the *source* of a README over CORS, which is why a repo
+    // link gets its own route rather than going through the proxy chain. The
+    // rendered repo page is a file tree, a commit bar and a sidebar wrapped
+    // around the README; the markdown behind it has none of that furniture to
+    // unweld afterwards.
+    //
+    // Everything outside the code itself — the issue tracker, a pull request, a
+    // release, the Actions log — has no README to read and is left to the
+    // standard article pipeline. So is /blob/ pointing at source code: reading
+    // a .js file aloud serves nobody.
+    const GITHUB_RESERVED_OWNERS = new Set([
+      'orgs', 'organizations', 'users', 'settings', 'notifications', 'explore',
+      'topics', 'trending', 'collections', 'events', 'sponsors', 'marketplace',
+      'features', 'pricing', 'about', 'login', 'join', 'new', 'search', 'apps',
+      'codespaces', 'enterprise', 'site', 'contact', 'security', 'readme', 'sitemap',
+    ]);
+    const GITHUB_DOC_PATHS = new Set(['tree', 'blob', 'raw']);
+    const GITHUB_DOC_FILE_RE = /\.(?:md|markdown|mdown|mkdn|mdx|rst|txt|adoc|asciidoc|org)$/i;
+
+    // Returns { owner, repo, ref, dir, filePath, label } for a GitHub link that
+    // has a README or a markdown doc behind it, or null for anything else.
+    // `ref` defaults to HEAD, which raw.githubusercontent.com resolves to the
+    // default branch — that is what removes the main-vs-master guess.
+    const parseGitHubUrl = (url) => {
+      try {
+        const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+        const host = u.hostname.replace(/^www\./, '');
+        const isRawHost = host === 'raw.githubusercontent.com';
+        if (host !== 'github.com' && !isRawHost) return null;
+
+        const parts = u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+        if (parts.length < 2) return null;
+        const owner = parts[0];
+        const repo = parts[1].replace(/\.git$/i, '');
+        if (!isRawHost && GITHUB_RESERVED_OWNERS.has(owner.toLowerCase())) return null;
+
+        const base = { owner, repo, ref: 'HEAD', dir: '', filePath: '' };
+        const label = (doc) => `${owner}/${repo}${doc ? ' — ' + doc : ''}`;
+        const isDocFile = (p) => GITHUB_DOC_FILE_RE.test(p) || /(^|\/)readme$/i.test(p);
+
+        // raw.githubusercontent.com/<owner>/<repo>/<ref>/<path> — already raw.
+        if (isRawHost) {
+          if (parts.length < 4) return null;
+          const filePath = parts.slice(3).join('/');
+          if (!isDocFile(filePath)) return null;
+          return { ...base, ref: parts[2], filePath, label: label(filePath) };
+        }
+
+        // The bare repo link, including github.com's own ?tab=readme-ov-file.
+        const rest = parts.slice(2);
+        if (!rest.length) return { ...base, label: label('') };
+        if (!GITHUB_DOC_PATHS.has(rest[0].toLowerCase())) return null;
+        if (rest.length < 2) return { ...base, label: label('') };
+
+        // /tree/<ref>/<dir> reads that directory's README; /blob/<ref>/<path>
+        // reads that one file. A ref carrying a slash (a feature/* branch) is
+        // indistinguishable from ref + path without asking the API, so the
+        // first segment is taken as the ref.
+        const ref = rest[1];
+        const path = rest.slice(2).join('/');
+        if (rest[0].toLowerCase() === 'tree') return { ...base, ref, dir: path, label: label(path) };
+        if (!path) return { ...base, ref, label: label('') };
+        if (!isDocFile(path)) return null;
+        return { ...base, ref, filePath: path, label: label(path) };
+      } catch { return null; }
+    };
+
+    // Named HTML entities turn up in READMEs constantly (&middot; between
+    // badges, &amp; in a title) and there are hundreds of them, so the browser's
+    // own table does the work. A textarea is the safe surface for it: its
+    // content is RCDATA, so nothing inside is ever parsed into an element.
+    let entityDecoder = null;
+    const decodeEntities = (s) => {
+      if (!s.includes('&')) return s;
+      try {
+        if (!entityDecoder) entityDecoder = document.createElement('textarea');
+        entityDecoder.innerHTML = s;
+        return entityDecoder.value || s;
+      } catch (e) { return s; }
+    };
+
+    // GFM markdown in, reading text out. This is not a renderer: the job is to
+    // leave something a TTS voice can speak and splitIntoSentences can index.
+    // Two rules shape all of it.
+    //
+    // Every block ends on terminal punctuation. splitIntoSentences matches
+    // `[^.!?]+[.!?]+`, so a trailing run with no full stop is dropped outright —
+    // which silently lost the last list item of every README — and an
+    // unterminated heading welds onto the paragraph below it. Adding the full
+    // stop also makes each heading and list item its own unit, which is what the
+    // reader lands on and what TTS pauses at.
+    //
+    // Anything whose value is visual rather than spoken goes. Badge images, code
+    // fences and emoji shortcodes are noise read aloud; a bare URL keeps only
+    // its host, because the reader renders no anchors to follow but deleting the
+    // URL outright breaks the sentence it sat in.
+    const markdownToReadableText = (md) => {
+      if (!md) return { title: '', text: '' };
+
+      const TERMINAL = /[.!?]["'’”)\]]?$/;
+
+      // A heading whose badges have just come off ends on the separator that sat
+      // between them ("React ·", "Flask |"), which reads as nothing at all.
+      const trimHeadingJunk = (s) => s.replace(/[\s·•|/\\\-–—:,]+$/, '').trim();
+
+      // Escapes come off first: leave them and the emphasis rules below strip the
+      // asterisks out of `\*literal\*` and leave the backslashes behind.
+      const inlineMarkup = (s) => s
+        .replace(/\\([\\`*_{}\[\]()#+\-.!>~|])/g, '$1')
+        // Badges and logos carry no spoken content — their alt text is "build
+        // passing", "npm v3.1.4" — so they go before links are unwrapped.
+        .replace(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, '')
+        .replace(/\[!\[[^\]]*\]\[[^\]]*\]\]\([^)]*\)/g, '')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+        .replace(/!\[[^\]]*\]\[[^\]]*\]/g, '')
+        .replace(/\[\^[^\]]*\]:?[ \t]*/g, '')
+        // Inline, reference and shortcut links all keep their text and lose the
+        // target. The shortcut form needs the preceding character checked so
+        // arr[0] survives as arr[0] rather than becoming arr0.
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/\[([^\]]*)\]\[[^\]]*\]/g, '$1')
+        .replace(/(^|[^\w\]])\[([^\[\]]*)\](?!\()/g, '$1$2')
+        // Autolinks, before the tag strip below eats them whole.
+        .replace(/<(https?:\/\/[^>\s]*)>/gi, '$1')
+        .replace(/<(?:mailto:)?([^\s<>@]+@[^\s<>]+)>/gi, '$1')
+        .replace(/<\/?[A-Za-z!/][^>]*>/g, ' ')
+        // The host alone reads as a name and still points somewhere. Sentence
+        // punctuation the match swallowed has to go back, or the block loses its
+        // full stop and merges into the next one.
+        .replace(/\bhttps?:\/\/([^\s<>"'`)\]]+)/gi, (m, rest) => {
+          const tail = rest.match(/[.,;:!?]+$/);
+          const host = rest.replace(/[.,;:!?]+$/, '').split(/[/?#]/)[0].replace(/^www\./, '');
+          return host + (tail ? tail[0] : '');
+        })
+        .replace(/`+([^`]*)`+/g, '$1')
+        .replace(/(\*\*\*|___)(\S[\s\S]*?\S|\S)\1/g, '$2')
+        .replace(/(\*\*|__)(\S[\s\S]*?\S|\S)\1/g, '$2')
+        .replace(/(\*|_)(\S[\s\S]*?\S|\S)\1/g, '$2')
+        .replace(/~~([\s\S]*?)~~/g, '$1')
+        // ":rocket:" reads as "colon rocket colon".
+        .replace(/:[a-z0-9][a-z0-9_+-]*:/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const inline = (s) => decodeEntities(inlineMarkup(s)).replace(/\s+/g, ' ').trim();
+
+      const lines = String(md).replace(/\r\n?/g, '\n')
+        // Front matter is metadata, and a docs page in a repo routinely has it.
+        .replace(/^---[ \t]*\n[\s\S]*?\n---[ \t]*(?:\n|$)/, '')
+        // Region markers, hidden TODOs, "do not edit" banners.
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .split('\n');
+
+      // A row of links separated by pipes or bullets is navigation — a language
+      // switcher, a docs/chat/social strip — not prose. It has to be recognised
+      // before the markup comes off, while the links are still visible, and only
+      // counts when the block carries none of the sentence punctuation that no
+      // real paragraph lacks.
+      const looksLikeNavRow = (raw) => {
+        // Counted on the closing bracket so a row built entirely out of reference
+        // links ("[Learn] | [Docs]", which heads Rust's README) counts too.
+        const links = (raw.match(/\]|<a[\s>]/gi) || []).length;
+        if (links < 2) return false;
+        if (!/[|·•]/.test(raw)) return false;
+        return !/[.!?]/.test(raw.replace(/\]\([^)]*\)/g, '').replace(/<[^>]*>/g, ''));
+      };
+
+      // Outer pipes are optional in GFM, so the |---|:-:| alignment row is the
+      // only reliable mark of a table — which also makes it the thing that
+      // rescues the header line sitting unflushed above it.
+      const tableCells = (t) => t.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+      const isAlignmentRow = (t) => {
+        if (!t.includes('|')) return false;
+        const cells = tableCells(t);
+        return cells.length > 0 && cells.every(c => /^:?-+:?$/.test(c));
+      };
+
+      const blocks = [];
+      let buf = [];
+      let fence = null;
+      let inTable = false;
+      let title = '';
+
+      const pushBlock = (text) => {
+        if (!text) return;
+        blocks.push(TERMINAL.test(text) ? text : text.replace(/[,;:]+$/, '') + '.');
+      };
+
+      const flush = () => {
+        if (!buf.length) return;
+        const raw = buf.join(' ');
+        buf = [];
+        if (looksLikeNavRow(raw)) return;
+        pushBlock(inline(raw));
+      };
+
+      const pushHeading = (raw, isH1) => {
+        const heading = trimHeadingJunk(inline(raw));
+        if (!heading) return;
+        if (isH1 && !title) title = heading;
+        pushBlock(heading);
+      };
+
+      for (const rawLine of lines) {
+        const trimmed = rawLine.replace(/\t/g, '    ').trim();
+
+        // Fenced code is dropped wholesale. An install command read aloud is
+        // noise, and with every run of whitespace collapsed it is unreadable on
+        // the page too. Indented code blocks are deliberately left alone —
+        // telling one from a list item's own nested content needs a parser, and
+        // guessing wrong drops real prose.
+        const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+        if (fence) {
+          if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = null;
+          continue;
+        }
+        if (fenceMatch) { flush(); inTable = false; fence = fenceMatch[1]; continue; }
+
+        if (!trimmed) { flush(); inTable = false; continue; }
+
+        // Link reference definitions are machinery — the labels that used them
+        // were unwrapped to their text above. A footnote definition ([^1]: …) is
+        // prose and stays, which is what the leading-^ and single-target guards
+        // separate.
+        if (/^\[[^^\]][^\]]*\]:[ \t]*\S+(?:[ \t]+["'(].*)?$/.test(trimmed)) { flush(); continue; }
+
+        // A setext underline, checked ahead of the horizontal rule it looks like,
+        // because the line above it is the heading.
+        if (buf.length && /^(=+|-+)[ \t]*$/.test(trimmed)) {
+          const raw = buf.join(' ');
+          buf = [];
+          pushHeading(raw, trimmed[0] === '=');
+          continue;
+        }
+
+        if (/^([-*_])[ \t]*(?:\1[ \t]*){2,}$/.test(trimmed)) { flush(); inTable = false; continue; }
+
+        const atx = trimmed.match(/^(#{1,6})[ \t]+(.*?)[ \t]*#*$/);
+        if (atx) {
+          flush();
+          inTable = false;
+          pushHeading(atx[2], atx[1].length === 1);
+          continue;
+        }
+
+        if (isAlignmentRow(trimmed)) {
+          // The header row is still buffered — re-read it as cells rather than
+          // letting it out as a paragraph with pipes through the middle of it.
+          if (buf.length === 1 && buf[0].includes('|')) buf[0] = tableCells(buf[0]).filter(Boolean).join(', ');
+          flush();
+          inTable = true;
+          continue;
+        }
+        if (trimmed[0] === '|' || (inTable && trimmed.includes('|'))) {
+          flush();
+          inTable = true;
+          // A row read as its cells in order is a poor substitute for a table,
+          // and the only one that keeps the data at all.
+          buf.push(tableCells(trimmed).filter(Boolean).join(', '));
+          flush();
+          continue;
+        }
+        inTable = false;
+
+        // Each list item is its own sentence: a README is mostly lists, and run
+        // together they read as one unpunctuated wall. The task-list checkbox
+        // needs the space after it checked, or "- [X](https://x.com/vuejs)" is
+        // read as a ticked box and loses its link text.
+        const bullet = trimmed.match(/^(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)$/);
+        if (bullet) {
+          flush();
+          buf.push(bullet[1].replace(/^\[[ xX]\](?=[ \t]|$)[ \t]*/, ''));
+          flush();
+          continue;
+        }
+
+        // A blockquote reads as the text it quotes. GitHub's alert syntax
+        // (> [!NOTE]) is a rendering hint, so name it instead of reading it.
+        let content = trimmed;
+        if (content[0] === '>') {
+          content = content.replace(/^(?:>[ \t]?)+/, '').trim();
+          const alert = content.match(/^\[!([A-Za-z]+)\][ \t]*(.*)$/);
+          if (alert) {
+            flush();
+            buf.push(alert[1][0].toUpperCase() + alert[1].slice(1).toLowerCase() + ':');
+            content = alert[2].trim();
+          }
+          if (!content) continue;
+        }
+
+        buf.push(content);
+      }
+      flush();
+
+      if (!title) {
+        // A README headed with an HTML <h1> usually wraps a logo image and a row
+        // of links; neither is a title, and the caller's owner/repo fallback
+        // beats both.
+        const htmlH1 = String(md).match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        if (htmlH1 && !looksLikeNavRow(htmlH1[1])) title = trimHeadingJunk(inline(htmlH1[1]));
+      }
+
+      return { title, text: blocks.join(' ').replace(/\s+/g, ' ').trim() };
+    };
     // Bot walls, CAPTCHA interstitials and "access denied" shells are served
     // with HTTP 200 and carry enough boilerplate to clear an extraction length
     // gate, so they get saved as the article and the entire fallback chain is
@@ -4069,7 +4372,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.57.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.58.0</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -6354,7 +6657,118 @@
             return;
           }
 
-          // Strategy 0: ForumMagnum posts (LessWrong, Alignment Forum, EA Forum).
+          // Strategy 0: GitHub READMEs and in-repo markdown docs.
+          //
+          // Both routes here are CORS-enabled, so there is no proxy in the path
+          // and no page chrome to strip off the result.
+          //
+          // raw.githubusercontent.com leads because it is a CDN with no rate
+          // limit. The one thing it cannot do is *find* the README — the ref and
+          // the filename have to be supplied. `HEAD` resolves to the default
+          // branch, which removes the main-vs-master guess, and README.md covers
+          // all but a handful of repos, so the common case is a single request;
+          // the other spellings only cost a round trip when that misses, and go
+          // out together rather than in series.
+          //
+          // api.github.com/repos/<owner>/<repo>/readme is the authority on the
+          // rest — any casing, .rst, .txt, a README in a subdirectory — and is
+          // second only because unauthenticated calls are capped at 60/hour per
+          // IP, which a reader tab can burn through in an afternoon.
+          //
+          // There is deliberately no proxied tier: a proxy adds nothing to a
+          // route that already answers `Access-Control-Allow-Origin: *`. If both
+          // fail, falling through to the standard pipeline fetches the repo page
+          // itself, where `.markdown-body` — already in the content-selector
+          // list — is the rendered README.
+          const GITHUB_README_NAMES = [
+            'README.md', 'readme.md', 'Readme.md', 'README.markdown',
+            'README.rst', 'README.txt', 'README', 'README.mdx',
+          ];
+
+          const githubDoc = parseGitHubUrl(url);
+          if (githubDoc) {
+            try {
+              const { owner, repo, ref, dir, filePath } = githubDoc;
+              showToast(`Fetching ${filePath ? 'document' : 'README'} from GitHub...`);
+
+              const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+              const fetchRaw = async (path) => {
+                const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref)}/${encodePath(path)}`;
+                const response = await fetchWithTimeout(rawUrl, 8000);
+                if (!response.ok) return null;
+                const body = await response.text();
+                return body && body.trim().length >= 40 ? body : null;
+              };
+
+              let markdown = null;
+              if (filePath) {
+                markdown = await fetchRaw(filePath).catch(() => null);
+              } else {
+                const prefix = dir ? dir.replace(/\/+$/, '') + '/' : '';
+                markdown = await fetchRaw(prefix + GITHUB_README_NAMES[0]).catch(() => null);
+                if (!markdown) {
+                  // Promise.all keeps the array in order, so `find` still picks
+                  // by preference rather than by whichever 404 came back first.
+                  const others = await Promise.all(
+                    GITHUB_README_NAMES.slice(1).map(name => fetchRaw(prefix + name).catch(() => null))
+                  );
+                  markdown = others.find(Boolean) || null;
+                }
+              }
+
+              if (!markdown) {
+                // `Accept: application/vnd.github.raw` asks for the file itself
+                // rather than the base64 envelope, but a proxy or an older API
+                // shape can ignore the media type, so both are handled.
+                const apiPath = filePath
+                  ? `contents/${encodePath(filePath)}`
+                  : `readme${dir ? '/' + encodePath(dir) : ''}`;
+                const query = ref && ref !== 'HEAD' ? `?ref=${encodeURIComponent(ref)}` : '';
+                try {
+                  const response = await fetchWithTimeout(
+                    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${apiPath}${query}`,
+                    8000,
+                    { headers: { Accept: 'application/vnd.github.raw' } }
+                  );
+                  if (response.ok) {
+                    const body = await response.text();
+                    if (body.trim().startsWith('{')) {
+                      const data = JSON.parse(body);
+                      // atob yields bytes, not characters — a README is full of
+                      // emoji and accents, so the UTF-8 decode is not optional.
+                      markdown = data?.content && data.encoding === 'base64'
+                        ? new TextDecoder().decode(Uint8Array.from(atob(data.content.replace(/\s/g, '')), c => c.charCodeAt(0)))
+                        : null;
+                    } else {
+                      markdown = body;
+                    }
+                    console.log('[HJ:github] API success', { chars: markdown?.length || 0 });
+                  } else {
+                    console.log('[HJ:github] API returned', response.status, response.status === 403 ? '(rate limit?)' : '');
+                  }
+                } catch (e) {
+                  console.log('[HJ:github] API failed:', e?.message || e);
+                }
+              }
+
+              const article = markdown ? markdownToReadableText(markdown) : null;
+              if (article && article.text.length >= 100) {
+                const content = article.text;
+                const sentences = splitIntoSentences(content);
+                sentencesRef.current = sentences;
+                console.log('[HJ:github] loaded', { chars: content.length, sentences: sentences.length });
+                addSource({ type: 'article', title: article.title || githubDoc.label, url, content });
+                setUrl('');
+                showToast(filePath ? 'Document loaded!' : 'README loaded!');
+                setLoading(false);
+                return;
+              }
+              console.log('[HJ:github] no README found — falling back to standard strategies');
+            } catch (e) {
+              console.log('[HJ:github] fetch error:', e?.message || e);
+            }
+          }
+          // Strategy 0.1: ForumMagnum posts (LessWrong, Alignment Forum, EA Forum).
           //
           // Scraping the page is hopeless — these sites sit behind a WAF that
           // answers every CORS proxy with a challenge page rather than the post.
@@ -7986,7 +8400,7 @@
             <div className="empty-state">
               <div className="empty-state-icon">📖</div>
               <h3>Article Reader</h3>
-              <p>Paste an article or PDF link above or load a Word or PDF file to begin. The app will read it aloud and let you take notes while you listen.</p>
+              <p>Paste an article, GitHub repo, or PDF link above or load a Word or PDF file to begin. The app will read it aloud and let you take notes while you listen.</p>
             </div>
           )}
           <VoiceModal
