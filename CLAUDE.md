@@ -159,6 +159,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 2305–2352 | `Icons` — SVG icon components |
 | 2353–2698 | Utility functions (`generateId`, `safeHostname`, `stripUrlFragment`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
 | 2699–2956 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 3255–3530 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
 | 2785–2793 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
 | 2958–3021 | `Toast` — Notification component with undo support |
 | 3023–3174 | `MediaSessionManager` — Browser Media Session API integration |
@@ -326,6 +327,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **FxTwitter / vxTwitter / Twitter syndication** — `api.fxtwitter.com`, `api.vxtwitter.com`, and `cdn.syndication.twimg.com` for extracting X.com post and Article text in the reader tab (x.com serves an empty JS shell to CORS proxies, so the page itself is never scraped); Jina Reader and `archive.ph` snapshots are rendered-page fallbacks for X Article bodies the mirror APIs don't carry
 - **ForumMagnum GraphQL** — `www.lesswrong.com/graphql`, `www.alignmentforum.org/graphql`, `forum.effectivealtruism.org/graphql`. `{post(input:{selector:{documentId:"<id>"}}){result{title,htmlBody}}}` returns the post body as clean HTML — no nav, no footer, no comments. Called from a **sandboxed iframe** (see below); also as a `?query=` GET through the proxy chain, which works because these servers run Apollo with `csrfPrevention: false`
 - **GreaterWrong** — `www.greaterwrong.com` / `ea.greaterwrong.com`, a server-rendered mirror of the same forums, fetched through the CORS proxy chain as the fallback when `/graphql` can't be reached. `?comments=false&hide-nav-bars=true` strips the page down to the post itself
+- **GitHub** — `raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>` for README and in-repo markdown source (a CDN, no rate limit, `Access-Control-Allow-Origin: *`), with `api.github.com/repos/<owner>/<repo>/readme` as the authority on whatever the README is actually called. Both CORS-enabled, so neither needs a proxy
 - **Wiktionary / Wikipedia** — `en.wiktionary.org/api/rest_v1/page/definition/` and `en.wikipedia.org/api/rest_v1/page/summary/` (both CORS-enabled, fetched directly with 3 s timeouts) for the voice-triggered "explain \<term\>" lookup
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
@@ -403,7 +405,8 @@ There are no linting or formatting tools configured.
 `type` is one of `article`, `text` (pasted), `pdf` (uploaded file), `youtube`,
 `podcast`, `xvideo` (X.com/Twitter — itself either a `broadcast` or a `tweet`
 video), or `voice` (standalone voice-note recordings). X.com posts and X
-Articles loaded in the reader tab are saved as regular `article` sources. Local
+Articles loaded in the reader tab are saved as regular `article` sources. So are
+GitHub READMEs and in-repo markdown docs. Local
 audio files (e.g. Gemini Notebook podcast exports) are `podcast` sources with
 `localFile: true`, and may carry a linked Gemini Notebook URL in `notebookLMUrl`.
 Use the `isNotebookSource(source)` helper rather than re-testing the title —
@@ -602,6 +605,72 @@ then fails on every proxy in turn — indistinguishable from the site being down
 That is what the shared fetcher's `decodeBody` exists for, and skipping it is what
 made this path look like it worked while returning nothing.
 
+**A GitHub repo link is a README, and GitHub gives away the markdown source.**
+`raw.githubusercontent.com` answers `Access-Control-Allow-Origin: *`, so the
+reader fetches the README's own markdown with no proxy in the path and no page
+chrome to unweld afterwards — the rendered repo page is a file tree, a commit bar
+and a sidebar wrapped around the same text. The one thing raw can't do is *find*
+the README: the ref and filename have to be supplied. **`HEAD` resolves to the
+default branch**, which is what removes the main-vs-master guess, and `README.md`
+covers all but a handful of repos, so the common case is one request. The other
+spellings (`readme.md`, `README.rst`, extensionless, …) go out together on a miss
+rather than in series, because they are cheap CDN 404s.
+
+`api.github.com/repos/<owner>/<repo>/readme` is the authority on the rest — any
+casing, a README in a subdirectory — and is **second, not first**, because
+unauthenticated calls are capped at 60/hour per IP, which a reader tab can burn
+through in an afternoon. `Accept: application/vnd.github.raw` asks for the file
+rather than the base64 envelope, but both shapes are handled, and `atob` yields
+bytes so the UTF-8 decode is not optional (a README is full of emoji).
+
+There is deliberately **no proxied tier**: a proxy adds nothing to a route that is
+already CORS-open. When both fail the route stands down and the standard pipeline
+fetches the repo page, where `.markdown-body` — already in the content-selector
+list, because it is GitHub's own class — is the rendered README.
+
+`parseGitHubUrl` only claims links that have a doc behind them: the bare repo
+(including `?tab=readme-ov-file`), `/tree/<ref>/<dir>`, `/blob/<ref>/<doc>` and
+`raw.githubusercontent.com`. Issues, pull requests, releases, Actions and `/blob/`
+pointing at source code return null and never touch GitHub — reading a `.js` file
+aloud serves nobody. A ref carrying a slash (a `feature/*` branch) can't be told
+from ref + path without asking the API, so the first segment is taken as the ref.
+
+**`markdownToReadableText` is not a renderer.** It leaves text a TTS voice can
+speak and `splitIntoSentences` can index, and two rules shape all of it:
+
+- **Every block ends on terminal punctuation.** `splitIntoSentences` matches
+  `[^.!?]+[.!?]+`, so a trailing run with no full stop is *dropped outright* —
+  which silently lost the last list item of every README — and an unterminated
+  heading welds onto the paragraph below it. Adding the stop also makes each
+  heading and list item its own unit, which is what the reader lands on and what
+  TTS pauses at.
+- **Anything whose value is visual rather than spoken goes.** Badge images (their
+  alt text is "build passing"), fenced code blocks, emoji shortcodes and nav rows
+  of pipe-separated links. A bare URL keeps **only its host**: the reader renders
+  no anchors to follow, but deleting the URL outright breaks the sentence it sat
+  in ("See for a list of forums").
+
+Four things the format imposes, each of which corrupted prose before:
+
+- **A task-list checkbox needs the space after it checked.** `- [X](https://…)`
+  is a link, not a ticked box; matching `\[[ xX]\]` without the lookahead ate the
+  link text and left a stray `(`.
+- **Escapes come off first.** Leave them and the emphasis rules strip the
+  asterisks out of `\*literal\*` and leave the backslashes behind.
+- **Outer pipes are optional in GFM**, so the `|---|:-:|` alignment row is the only
+  reliable mark of a table — which makes it the thing that also rescues the header
+  line still sitting unflushed above it.
+- **Reference links count as links.** Nav-row detection counts closing brackets,
+  not `](`, because Rust's README heads with a row built entirely out of
+  `[Learn] | [Docs]` shortcut refs.
+
+Indented (4-space) code blocks are deliberately **left as text**: telling one from
+a list item's own nested content needs a real parser, and guessing wrong drops
+real prose. Entities are decoded with the browser's own table via a `textarea`
+(its content is RCDATA, so nothing inside is ever parsed into an element) rather
+than a hand-maintained map — `&middot;` between badges and `&amp;` in a title are
+routine.
+
 
 ## Making Changes
 
@@ -619,6 +688,7 @@ made this path look like it worked while returning nothing.
 - **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2425) plus `handleAskQuery` in both `ReaderView` and `MediaView`
 - **Persistence**: `HJStore` IndexedDB module (line 2699)
 - **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 4313)
+- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 3255) plus the Strategy 0 block in `fetchArticleFromUrl`
 - **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 6799)
 - **Gemini Notebook linking**: `NotebookLMModal` (line 3847); URL validation via `NOTEBOOK_URL_RE` (line 2643)
 - **Library/export**: `LibraryView` (line 10146)
