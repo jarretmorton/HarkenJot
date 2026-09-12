@@ -153,24 +153,25 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 140–191 | `webSpeechAPI` — Browser-native speech recognition module |
 | 193–351 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
 | 357 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
-| 358–2294 | `<style>` — All CSS, including CSS variables for theming |
-| 2301 | `#app-source` script block opens (all JSX below lives here) |
-| 2302 | React hooks imports |
-| 2305–2352 | `Icons` — SVG icon components |
-| 2353–2698 | Utility functions (`generateId`, `safeHostname`, `stripUrlFragment`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
-| 2699–2956 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
-| 3255–3530 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
-| 2785–2793 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 2958–3021 | `Toast` — Notification component with undo support |
-| 3023–3174 | `MediaSessionManager` — Browser Media Session API integration |
-| 3176–3746 | `App` — Root component, state management, tab routing |
-| 3748–3845 | `EditableTitle` — Inline title editing component |
-| 3847–4001 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
-| 4313–6797 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
-| 6799–10144 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 10146–10560 | `LibraryView` — Source and note management, import/export |
-| 10562–10762 | `NoteSidebar` — Notes display, editing, and navigation |
-| 10764 | `ReactDOM.createRoot` render call |
+| 358–2470 | `<style>` — All CSS, including CSS variables for theming |
+| 2475 | `#app-source` script block opens (all JSX below lives here) |
+| 2476 | React hooks imports |
+| 2478–2527 | `Icons` — SVG icon components |
+| 2528–3128 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 2683–2730 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
+| 3129–3400 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 3217–3225 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 3450–3720 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
+| 3829–3893 | `Toast` — Notification component with undo support |
+| 3895–4102 | `MediaSessionManager` — Browser Media Session API integration |
+| 4104–4774 | `App` — Root component, state management, tab routing, failed-link recording |
+| 4776–4873 | `EditableTitle` — Inline title editing component |
+| 4875–5382 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
+| 5384–8702 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
+| 8704–12405 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
+| 12407–12887 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
+| 12889–13093 | `NoteSidebar` — Notes display, editing, and navigation |
+| 13095 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -204,6 +205,8 @@ All state lives in the `App` component via `useState` hooks. There is no externa
 - `toast` / `undoData` — Toast notification state and pending undo payload
 - `isMobileDevice` — Mobile detection used to adapt UI affordances
 - `pendingNotebookLMModal` — Set when a local audio file is loaded so MediaView can show the NotebookLM modal
+- `failedLinks` — URLs that failed to load, with the diagnostic trace of the attempt (see **Saving a link that failed to load**)
+- `retryLink` — Set when a saved failure is retried from the library; the target view consumes it, refills its input and re-runs the load
 
 State is persisted via the `HJStore` module, which is backed by **IndexedDB**
 (object store `kv` in database `harkenjot`) to avoid the ~5 MB localStorage cap.
@@ -229,6 +232,7 @@ the user actually used last.
 | `volume` | `harkenjot_volume` | Global playback volume (number, 0-1) |
 | `net_hints` | `harkenjot_net_hints` | Network routing memory: last-working CORS proxy per host, hosts whose proxy chain returned no article (7-day TTL), learned custom-domain Substack hosts, show-name → RSS feed map (7-day TTL) |
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
+| `failed_links` | `harkenjot_failed_links` | Links that failed to load, newest first, capped at 50 — each with where it failed and the trace of the attempt |
 
 ### In-app volume
 
@@ -419,11 +423,71 @@ it covers the `isNotebookLM` flag plus both the old and new brand names.
 
 Notes reference their parent source via `sourceId`. Position anchoring differs by source type: sentence index for text, timestamp for media.
 
+**Failed-link object** (the `failed_links` key — not a source, and never in `sources`):
+```js
+{ id, url, view, stage, reason, detail, trace, attempts, appVersion, firstFailedAt, lastFailedAt }
+```
+
+`view` is `reader` or `media` and decides which tab Retry opens. See **Saving a
+link that failed to load** for what `stage` and `trace` carry.
+
 ### Error Handling
 
 - CORS fetch uses a chain of proxy fallbacks
 - Speech recognition falls back from Web Speech API to Whisper
 - User-facing errors shown via the `Toast` component
+
+### Saving a link that failed to load
+
+A URL typed into the reader or player used to live only in that view's input box.
+A failed fetch left it sitting there — but a tab change, a remount (both views are
+keyed on `currentSource`), or a reload threw it away, so the cost of a failure was
+retyping the link from wherever it came from. Every failure path now calls
+`recordFailedLink` instead, and the saved entries render as the **Unloaded links**
+panel at the top of the library, each with Retry / Link / Report / delete.
+
+Entries are keyed by `normalizeUrlKey`, so a retry updates one entry (bumping
+`attempts`) rather than piling up near-duplicates. `addSource` calls
+`dropFailedLink` for the source's URL, so a link that eventually loads — including
+one pasted in manually after the fetch failed — clears itself off the list. The
+list is capped at 50 and its panel is height-capped in CSS, so it can neither grow
+without bound nor bury the library.
+
+**Retrying re-runs the ordinary path, on purpose.** Most of these failures are not
+deterministic: the CORS proxies are free services that rate-limit and go down,
+Jina's keyless tier is rate-limited, `archive.org` may have no snapshot *today*,
+and every tier is on a timeout. The same link often loads on a later day with no
+code change — which is most of why keeping it is worth anything.
+
+**`stage` is the part worth reading.** The pipelines fail in genuinely different
+places, and the fix differs by place: `blocked` (a WAF beat every route — paste the
+text), `extraction` (routes answered but nothing was article-sized — a parser
+problem), `x-extract`, `pdf-fetch`, `feed-lookup` (iTunes found no feed for the
+show), `feed-parse`, `spotify-metadata`, `parse` (the URL itself carried no id),
+`unrecognised`, `wrong-tab` (an X post that is really a video — recorded against
+the *player*, so Retry opens it where it will work), and `exception`.
+
+**The trace comes from the logging that already existed.** Every tier narrates
+itself through `console.log('[HJ:…]')`, so rather than threading a collector
+through forty call sites, `linkTrace` wraps `console.log`/`warn`/`error` once and
+keeps the `[HJ:]` lines in a bounded ring buffer. A loader takes `linkTrace.mark()`
+before starting and `linkTrace.since(mark)` on failure, which yields exactly the
+lines its own attempt emitted. The original console method is always called first,
+and the capture is wrapped in its own `try`, so diagnostics can never break logging.
+
+Two rules the buffer imposes on new logging:
+
+- **Prefix an outcome, not an attempt.** `[HJ:]` lines are captured; unprefixed
+  ones are not. The proxy chain's "Trying …" lines are deliberately left
+  unprefixed — they double the volume and say nothing the outcome line doesn't.
+- **An outcome line must stand on its own**, because it is read far from its
+  context. `[HJ:net] <proxy> → <targetUrl> failed: …` names both ends; the bare
+  `<proxy> failed:` it replaced did not say *what* it was fetching, which was
+  useless once four tiers were sharing the chain.
+
+`MediaView` takes its mark in `loadMedia`, the single entry point through which the
+Spotify and RSS loaders are always reached, so one mark spans however many hops the
+resolution takes and every failure reports against the URL that was actually typed.
 
 ### Network Fetch Conventions
 
@@ -683,17 +747,18 @@ routine.
 
 ### Common Modification Areas
 
-- **UI/Theme**: CSS variables in `:root` (around line 359)
-- **Icons**: `Icons` object (line 2305)
-- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2425) plus `handleAskQuery` in both `ReaderView` and `MediaView`
-- **Persistence**: `HJStore` IndexedDB module (line 2699)
-- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 4313)
-- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 3255) plus the Strategy 0 block in `fetchArticleFromUrl`
-- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 6799)
-- **Gemini Notebook linking**: `NotebookLMModal` (line 3847); URL validation via `NOTEBOOK_URL_RE` (line 2643)
-- **Library/export**: `LibraryView` (line 10146)
-- **Notes panel**: `NoteSidebar` (line 10562)
-- **App-level state/routing**: `App` (line 3176)
+- **UI/Theme**: CSS variables in `:root` (around line 360)
+- **Icons**: `Icons` object (line 2478)
+- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2528) plus `handleAskQuery` in both `ReaderView` and `MediaView`
+- **Persistence**: `HJStore` IndexedDB module (line 3129)
+- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 5384)
+- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 3450) plus the Strategy 0 block in `fetchArticleFromUrl`
+- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 8704)
+- **Gemini Notebook linking**: `NotebookLMModal` (line 4875); URL validation via `NOTEBOOK_URL_RE` (line 3034)
+- **Library/export, Unloaded links panel**: `LibraryView` (line 12407)
+- **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
+- **Notes panel**: `NoteSidebar` (line 12889)
+- **App-level state/routing**: `App` (line 4104)
 
 ### Version
 

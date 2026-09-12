@@ -1545,6 +1545,99 @@
       color: #dc2626;
     }
 
+    /* Unloaded links — the saved-failure panel at the top of the library.
+       Capped in height so a run of dead links can never push the library itself
+       off screen; the list scrolls inside the panel instead. */
+    .failed-links-panel {
+      border: 1px solid var(--note-border);
+      background: var(--note-bg);
+      border-radius: 10px;
+      margin-bottom: 1rem;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .failed-links-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 0.75rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    .failed-links-count {
+      background: var(--accent);
+      color: white;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.05rem 0.45rem;
+    }
+
+    .failed-links-list {
+      /* dvh, with a vh fallback, for the same reason .modal uses it: plain vh is
+         the *large* viewport, so with the URL bar showing the panel would claim
+         more of the screen than it appears to. Sized to clear three entries —
+         the realistic backlog — without an inner scroll; a longer list scrolls
+         here rather than pushing the library off the screen. */
+      max-height: 52vh;
+      max-height: 52dvh;
+      overflow-y: auto;
+      padding: 0 0.75rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .failed-link-item {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.7rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+
+    .failed-link-url {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .failed-link-reason {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .failed-link-meta {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .failed-link-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.15rem;
+    }
+
+    .failed-link-actions .note-action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
     /* Library View */
     .library-grid {
       display: grid;
@@ -2439,6 +2532,9 @@
     };
 
     // Utility functions
+    // Shown in the header and stamped into failed-link reports, so a report always
+    // names the build it came from.
+    const APP_VERSION = '1.59.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -2468,6 +2564,37 @@
       // A leading "#" is not a URL with a fragment; leave it for the caller's
       // own validation to reject rather than handing back an empty string.
       return hash > 0 ? trimmed.slice(0, hash) : trimmed;
+    };
+
+    // Identity key for "is this the same link?" — used by duplicate detection and
+    // by the failed-link list, so a retry updates the entry it came from rather
+    // than adding a second one that differs only by a trailing slash.
+    const normalizeUrlKey = (u) => (u || '').trim().toLowerCase().replace(/#.*$/, '').replace(/\/$/, '');
+
+    // A failed link's report, shaped for pasting somewhere a person or an agent
+    // can act on it. The trace is the [HJ:] logging emitted during the attempt —
+    // which proxy answered, which returned a 403, whether Wayback had a snapshot —
+    // which is the part that says *where* the pipeline gave up rather than just
+    // that it did.
+    const formatFailedLinkReport = (entry) => {
+      if (!entry) return '';
+      const lines = [
+        `URL: ${entry.url}`,
+        `Tab: ${entry.view === 'media' ? 'Player' : 'Reader'}`,
+        `Failed at: ${entry.stage}`,
+        `Reason: ${entry.reason}`,
+      ];
+      if (entry.detail) lines.push(`Detail: ${entry.detail}`);
+      lines.push(`Attempts: ${entry.attempts}`);
+      lines.push(`Last tried: ${new Date(entry.lastFailedAt).toLocaleString()}`);
+      if (entry.appVersion) lines.push(`HarkenJot: v${entry.appVersion}`);
+      if (entry.trace && entry.trace.length) {
+        lines.push('Trace:');
+        entry.trace.forEach(t => lines.push(`  ${t}`));
+      } else {
+        lines.push('Trace: (none captured)');
+      }
+      return lines.join('\n');
     };
 
     const formatDate = (date) => new Date(date).toLocaleDateString('en-US', {
@@ -2546,6 +2673,54 @@
       if (!query) return { triggered: false, query: trimmed }; // bare "explain" → normal note
       return { triggered: true, query };
     };
+
+    // Diagnostics ring buffer for a load that fails.
+    //
+    // Every tier in the article, X, GitHub, forum and podcast pipelines already
+    // narrates itself through console.log('[HJ:…]') — which proxy answered, which
+    // returned a 403, whether Wayback had a snapshot. That trace is exactly what
+    // makes a failure report worth pasting into an issue, and the cheapest way to
+    // capture it is to wrap the logger once rather than thread a collector through
+    // forty call sites.
+    //
+    // Only '[HJ:' lines are kept, the buffer is bounded, and the original console
+    // method is always called first — so if anything in here throws, the app's own
+    // logging is untouched.
+    const linkTrace = (() => {
+      const MAX_LINES = 240;
+      const lines = [];
+      let seq = 0; // monotonic, so a mark stays valid after the buffer rolls over
+
+      const push = (level, args) => {
+        const head = args[0];
+        if (typeof head !== 'string' || head.indexOf('[HJ:') !== 0) return;
+        const text = args.map(a => {
+          if (typeof a === 'string') return a;
+          if (a instanceof Error) return a.message || String(a);
+          try { return JSON.stringify(a); } catch (e) { return String(a); }
+        }).join(' ');
+        lines.push({ seq: seq++, level, text });
+        if (lines.length > MAX_LINES) lines.shift();
+      };
+
+      try {
+        ['log', 'warn', 'error'].forEach((level) => {
+          const original = console[level].bind(console);
+          console[level] = (...args) => {
+            original(...args);
+            try { push(level, args); } catch (e) { /* diagnostics must never break logging */ }
+          };
+        });
+      } catch (e) {
+        // A console we can't wrap just means no trace; everything else still works.
+      }
+
+      return {
+        // Call before starting a load; hand the result to since() when it fails.
+        mark: () => seq,
+        since: (from) => lines.filter(l => l.seq >= from).map(l => (l.level === 'log' ? l.text : `${l.level}: ${l.text}`)),
+      };
+    })();
 
     // Fetch with a hard timeout so a hung request can't stall its caller. Several public CORS
     // proxies hang instead of failing fast; capping each attempt keeps fallback chains moving.
@@ -2964,7 +3139,7 @@
       _dbName: 'harkenjot',
       _store: 'kv',
       _handleStore: 'audioHandles',
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache'],
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache', 'failed_links'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
@@ -2975,6 +3150,7 @@
         volume: 'harkenjot_volume',
         net_hints: 'harkenjot_net_hints',
         feed_cache: 'harkenjot_feed_cache',
+        failed_links: 'harkenjot_failed_links',
       },
 
       _open() {
@@ -3941,6 +4117,21 @@
       const [sources, setSources] = useState(() => HJStore.get('sources') || []);
       const [currentSource, setCurrentSource] = useState(restoredSession ? restoredSession.source : null);
       const [notes, setNotes] = useState(() => HJStore.get('notes') || []);
+      // Links that failed to load.
+      //
+      // A URL typed into the reader or player used to live only in that view's
+      // input box. A failed fetch left it sitting there — but a tab change, a
+      // remount (both views are keyed on currentSource) or a reload threw it away,
+      // so the cost of a failure was retyping the link from wherever it came from.
+      // Failures are saved here instead, each with the diagnostic trace of its own
+      // attempt, so the link can be retried later or handed off with enough detail
+      // to say where the pipeline gave up. Keyed by normalised URL: retrying the
+      // same link updates one entry instead of piling up near-duplicates.
+      const [failedLinks, setFailedLinks] = useState(() => HJStore.get('failed_links') || []);
+      // Set when a saved failure is retried from the library: the target view picks
+      // it up, fills its input and re-runs the load. The token makes a second retry
+      // of the same URL a distinct value, so the effect fires again.
+      const [retryLink, setRetryLink] = useState(null);
       // Global TTS voice preference (voiceURI string) — applies across all sources.
       // null means "auto" (use getBestVoice). Stored separately from per-source speed.
       const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => HJStore.get('voice_uri') || null);
@@ -4021,6 +4212,10 @@
           if (e && e.name === 'QuotaExceededError') showToast('Storage full — notes may not persist. Export your library and delete old sources to free space.');
         });
       }, [notes]);
+
+      useEffect(() => {
+        HJStore.set('failed_links', failedLinks).catch((e) => console.error('Failed to save failed links:', e));
+      }, [failedLinks]);
 
       useEffect(() => {
         HJStore.set('voice_uri', selectedVoiceURI).catch((e) => console.error('Failed to save voice preference:', e));
@@ -4121,9 +4316,57 @@
         const newSource = { ...source, id: generateId(), createdAt: new Date().toISOString() };
         setSources(prev => [newSource, ...prev]);
         setCurrentSource(newSource);
+        // The link made it in, so its failure entry has served its purpose. Every
+        // successful loader lands here, which is what keeps the saved list to
+        // links that are still actually outstanding.
+        if (newSource.url) dropFailedLink(newSource.url);
         showToast('Source added to library');
         return newSource;
       };
+
+      // Cap the saved list so a run of dead links can't grow without bound. Fifty
+      // is far more than a backlog anyone works through by hand.
+      const MAX_FAILED_LINKS = 50;
+
+      // Called from every failure path in the reader and player. `trace` is the
+      // [HJ:] logging emitted during this attempt — see linkTrace.
+      const recordFailedLink = useCallback(({ url, view, stage, reason, detail, trace }) => {
+        const canonical = stripUrlFragment(url || '');
+        if (!canonical) return;
+        const key = normalizeUrlKey(canonical);
+        setFailedLinks(prev => {
+          const existing = prev.find(f => normalizeUrlKey(f.url) === key);
+          const now = new Date().toISOString();
+          const entry = {
+            id: existing ? existing.id : generateId(),
+            url: canonical,
+            view: view || 'reader',
+            stage: stage || 'unknown',
+            reason: reason || 'Load failed',
+            detail: detail || '',
+            // Bounded again here: the buffer holds a whole attempt, and a chatty
+            // one (every proxy, every fallback tier) is not worth storing whole.
+            trace: Array.isArray(trace) ? trace.slice(-60) : [],
+            attempts: existing ? (existing.attempts || 1) + 1 : 1,
+            appVersion: APP_VERSION,
+            firstFailedAt: existing ? existing.firstFailedAt : now,
+            lastFailedAt: now,
+          };
+          return [entry, ...prev.filter(f => normalizeUrlKey(f.url) !== key)].slice(0, MAX_FAILED_LINKS);
+        });
+      }, []);
+
+      const dropFailedLink = useCallback((url) => {
+        const key = normalizeUrlKey(stripUrlFragment(url || ''));
+        if (!key) return;
+        setFailedLinks(prev => prev.some(f => normalizeUrlKey(f.url) === key)
+          ? prev.filter(f => normalizeUrlKey(f.url) !== key)
+          : prev);
+      }, []);
+
+      const removeFailedLink = useCallback((id) => {
+        setFailedLinks(prev => prev.filter(f => f.id !== id));
+      }, []);
 
       // Duplicate detection: loaders call checkDuplicateBeforeLoad before doing
       // any heavy fetching/processing. If a match is found in the library, a
@@ -4134,10 +4377,9 @@
 
       const findDuplicateSource = useCallback((candidate) => {
         if (!candidate) return null;
-        const normalizeUrl = (u) => (u || '').trim().toLowerCase().replace(/#.*$/, '').replace(/\/$/, '');
-        const urlA = normalizeUrl(candidate.url);
+        const urlA = normalizeUrlKey(candidate.url);
         if (urlA) {
-          const dup = sources.find(s => normalizeUrl(s.url) === urlA);
+          const dup = sources.find(s => normalizeUrlKey(s.url) === urlA);
           if (dup) return dup;
         }
         if (candidate.videoId) {
@@ -4372,7 +4614,7 @@
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>
-                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v1.58.0</span></div>
+                <div className="logo-text">HarkenJot <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 400 }}>v{APP_VERSION}</span></div>
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
@@ -4442,6 +4684,9 @@
                   setCarMode={setCarMode}
                   isMobileDevice={isMobileDevice}
                   checkDuplicateBeforeLoad={checkDuplicateBeforeLoad}
+                  recordFailedLink={recordFailedLink}
+                  retryLink={retryLink && retryLink.view !== 'media' ? retryLink : null}
+                  onRetryConsumed={() => setRetryLink(null)}
                   selectedVoiceURI={selectedVoiceURI}
                   setSelectedVoiceURI={setSelectedVoiceURI}
                   volume={volume}
@@ -4467,6 +4712,9 @@
                   pendingNotebookLMModal={pendingNotebookLMModal}
                   setPendingNotebookLMModal={setPendingNotebookLMModal}
                   checkDuplicateBeforeLoad={checkDuplicateBeforeLoad}
+                  recordFailedLink={recordFailedLink}
+                  retryLink={retryLink && retryLink.view === 'media' ? retryLink : null}
+                  onRetryConsumed={() => setRetryLink(null)}
                   selectedVoiceURI={selectedVoiceURI}
                   volume={volume}
                   setVolume={setVolume}
@@ -4476,6 +4724,15 @@
                 <LibraryView
                   sources={sources}
                   notes={notes}
+                  failedLinks={failedLinks}
+                  retryFailedLink={(entry) => {
+                    // The token makes a second retry of the same URL a new value,
+                    // so the consuming effect in the target view fires again.
+                    setRetryLink({ url: entry.url, view: entry.view, token: generateId() });
+                    changeTab(entry.view === 'media' ? 'media' : 'reader');
+                  }}
+                  removeFailedLink={removeFailedLink}
+                  setFailedLinks={setFailedLinks}
                   setCurrentSource={(source) => {
                     setCurrentSource(source);
                     changeTab(source.type === 'youtube' || source.type === 'podcast' || source.type === 'xvideo' ? 'media' : 'reader');
@@ -5130,7 +5387,7 @@
     };
 
     // Reader View Component
-    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, selectedVoiceURI, setSelectedVoiceURI, volume, setVolume }, ref) => {
+    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, setSelectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [loading, setLoading] = useState(false);
       const [content, setContent] = useState(null);
@@ -6013,6 +6270,15 @@
 
         setLoading(true);
 
+        // Everything the pipeline logs from here on belongs to this attempt, so a
+        // failure below can hand off the trace of its own walk rather than a
+        // generic "it didn't work". See linkTrace.
+        const traceFrom = linkTrace.mark();
+        const failed = (stage, reason, detail, view) => recordFailedLink({
+          url, view: view || 'reader', stage, reason,
+          detail: detail || '', trace: linkTrace.since(traceFrom),
+        });
+
         // Helper: fetch URL as PDF binary data (direct + CORS proxy fallback)
         const fetchPdfBinary = async (pdfUrl) => {
           const proxies = [
@@ -6069,6 +6335,7 @@
               return;
             } catch (error) {
               console.error('PDF fetch error:', error);
+              failed('pdf-fetch', 'Every route to the PDF failed (direct fetch and all CORS proxies)', error?.message);
               showToast('Could not load PDF. Try pasting content manually.');
               setShowManualInput(true);
               setLoading(false);
@@ -6201,14 +6468,14 @@
                   html = proxy.extract(text);
                 }
                 if (html && html.length > 100 && !looksLikeBinary(html)) {
-                  console.log(`${proxy.name} succeeded`);
+                  console.log(`[HJ:net] ${proxy.name} → ${targetUrl} succeeded (${html.length} chars)`);
                   netHints.recordProxy(targetHost, proxy.name);
                   return html;
                 }
                 if (looksLikeBinary(html)) throw new Error(`${proxy.name} returned compressed/binary content`);
                 return null;
               } catch (error) {
-                console.log(`${proxy.name} failed:`, error.message);
+                console.log(`[HJ:net] ${proxy.name} → ${targetUrl} failed:`, error.message);
                 return null;
               }
             }), { staggerMs: 2500 });
@@ -6415,7 +6682,7 @@
                 const result = tryExtractArticle(await response.text());
                 if (result) return result;
               } catch (e) {
-                console.log('Wayback Machine failed:', e.message);
+                console.log(`[HJ:article] Wayback failed (${candidate}):`, e.message);
               }
             }
             return null;
@@ -6590,6 +6857,9 @@
 
             if (!isXArticle && info) {
               if (info.hasVideo && stripTcoLinks(info.text).length < 100) {
+                // Saved against the player rather than the reader, so retrying it
+                // from the library opens it where it will actually work.
+                failed('wrong-tab', 'This X post is a video — it belongs in the Player tab', '', 'media');
                 showToast('This X post is a video — open it in the Media tab instead.');
                 setLoading(false);
                 return;
@@ -6649,6 +6919,9 @@
             // An Article whose full body couldn't be fetched is not worth
             // saving — a preview or bare t.co link would just pollute the
             // library. Fail loudly to manual paste instead.
+            failed('x-extract', isXArticle
+              ? 'Only the article preview came back — no mirror API or snapshot carried the full body'
+              : 'No X mirror API (fxtwitter, vxtwitter, syndication) returned post text');
             showToast(isXArticle
               ? 'Could only get the article preview — paste the article text manually.'
               : 'Could not load X post. Try pasting the text manually.');
@@ -7035,6 +7308,7 @@
               return;
             } catch (error) {
               console.error('PDF fallback error:', error);
+              failed('pdf-fetch', 'The page turned out to be a PDF, but fetching its bytes failed', error?.message);
               showToast('Could not load PDF. Try pasting content manually.');
               setShowManualInput(true);
               setLoading(false);
@@ -7191,6 +7465,11 @@
             // "Could not extract" reads like a parser bug. On a walled publisher
             // nothing was ever fetched to parse, and pasting really is the only
             // way through — say so rather than implying the app mis-read the page.
+            failed(
+              preloadFallbacks ? 'blocked' : 'extraction',
+              preloadFallbacks
+                ? `${safeHostname(url)} blocked every fetch route — proxies, archives and the reader service all came back empty`
+                : 'Every tier ran but none returned article-sized text');
             showToast(preloadFallbacks
               ? `${safeHostname(url)} blocked every fetch route — paste the article text below.`
               : 'Could not extract enough content. Try pasting manually.');
@@ -7215,6 +7494,7 @@
 
         } catch (error) {
           console.error('Fetch error:', error);
+          failed('exception', 'The load threw before any tier could finish', error?.message || String(error));
           showToast('Could not fetch content. Try pasting manually.');
           setShowManualInput(true);
         }
@@ -7223,6 +7503,18 @@
       };
 
       const fetchContent = () => fetchArticleFromUrl(stripUrlFragment(url));
+
+      // Retrying a saved failure from the library. The URL goes back in the input
+      // and straight down the normal path — nothing about the walk differs from a
+      // hand-typed link, which is the point: the routes that failed are free ones
+      // that come and go, so the same link often loads on a later day.
+      useEffect(() => {
+        if (!retryLink) return;
+        setUrl(retryLink.url);
+        setShowManualInput(false);
+        onRetryConsumed();
+        fetchArticleFromUrl(stripUrlFragment(retryLink.url));
+      }, [retryLink]);
 
       const handleManualSubmit = async () => {
         if (!manualContent.trim()) return;
@@ -8415,7 +8707,7 @@
     });
 
     // Media View Component
-    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, selectedVoiceURI, volume, setVolume }, ref) => {
+    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [isPlaying, setIsPlaying] = useState(false);
       const [currentTime, setCurrentTime] = useState(0);
@@ -9861,6 +10153,23 @@
       };
 
       // Load podcast from Spotify URL
+      // Diagnostics for the load in flight. loadMedia is the single entry point —
+      // the Spotify and RSS loaders are only ever reached through it — so one mark
+      // taken there spans however many hops the resolution takes, and each failure
+      // site below reports against the URL that was actually typed.
+      const loadTraceRef = useRef({ from: 0, url: '' });
+      const beginLoadTrace = (targetUrl) => {
+        loadTraceRef.current = { from: linkTrace.mark(), url: targetUrl };
+      };
+      const failedLoad = (stage, reason, detail) => {
+        const { from, url: attemptedUrl } = loadTraceRef.current;
+        if (!attemptedUrl) return;
+        recordFailedLink({
+          url: attemptedUrl, view: 'media', stage, reason,
+          detail: detail || '', trace: linkTrace.since(from),
+        });
+      };
+
       const loadPodcastFromSpotify = async () => {
         setIsLoadingPodcast(true);
         showToast('Searching for podcast feed...');
@@ -9892,6 +10201,7 @@
               if (pageMeta?.showName) showName = pageMeta.showName;
             }
             if (!showName) {
+              failedLoad('spotify-metadata', 'Spotify oEmbed and the page scrape both failed to name the show');
               showToast('Could not fetch Spotify show details - try pasting the RSS feed URL instead');
               setIsLoadingPodcast(false);
               return;
@@ -9904,6 +10214,7 @@
             // matching and resolves by show name only.
             const rssInfo = await searchForRSSFeed(showName, '');
             if (!rssInfo) {
+              failedLoad('feed-lookup', `No RSS feed found for the show "${showName}" via iTunes search`);
               showToast('Could not find RSS feed for this show - try pasting the RSS feed URL instead');
               setIsLoadingPodcast(false);
               return;
@@ -9925,6 +10236,12 @@
 
             if (!result.ok) {
               console.log('[HJ:podcast] show-branch failure', { feedUrl: rssInfo.feedUrl, reason: result.reason, detail: result.detail });
+              failedLoad('feed-parse', result.reason === 'fetch_failed'
+                ? 'The resolved RSS feed was blocked by CORS on every proxy'
+                : result.reason === 'parse_error'
+                  ? 'The resolved RSS feed came back as malformed XML'
+                  : 'The resolved RSS feed had no playable episodes — possibly the wrong show',
+                `feed: ${rssInfo.feedUrl}${result.detail ? ` — ${result.detail}` : ''}`);
               if (result.reason === 'fetch_failed') {
                 setUrl(rssInfo.feedUrl);
                 showToast('Feed blocked by CORS — feed URL pasted, try loading directly');
@@ -10005,6 +10322,7 @@
           }
 
           if (!metadata || !metadata.title) {
+            failedLoad('spotify-metadata', 'Spotify oEmbed returned no episode title');
             showToast('Could not fetch Spotify metadata - try pasting the RSS feed URL instead');
             setIsLoadingPodcast(false);
             return;
@@ -10025,6 +10343,7 @@
               : await searchForRSSFeed(showForSearch, metadata.title);
           }
           if (!rssInfo) {
+            failedLoad('feed-lookup', `No RSS feed found for "${metadata.title}" via iTunes search`);
             showToast('Could not find RSS feed for this podcast - try pasting the RSS feed URL instead');
             setIsLoadingPodcast(false);
             return;
@@ -10047,6 +10366,12 @@
 
           if (!result.ok) {
             console.log('[HJ:podcast] episode-branch failure', { feedUrl: rssInfo.feedUrl, reason: result.reason, detail: result.detail });
+            failedLoad('feed-parse', result.reason === 'fetch_failed'
+              ? 'The resolved RSS feed was blocked by CORS on every proxy'
+              : result.reason === 'parse_error'
+                ? 'The resolved RSS feed came back as malformed XML'
+                : 'The resolved RSS feed had no playable episodes — possibly the wrong show',
+              `feed: ${rssInfo.feedUrl}${result.detail ? ` — ${result.detail}` : ''}`);
             if (result.reason === 'fetch_failed') {
               setUrl(rssInfo.feedUrl);
               showToast('Feed blocked by CORS — feed URL pasted, try loading directly');
@@ -10108,6 +10433,7 @@
           showToast('Podcast loaded!');
         } catch (error) {
           console.error('[HJ:podcast] loading error:', error);
+          failedLoad('exception', 'The podcast load threw before it could finish', error?.message || String(error));
           showToast('Failed to load podcast');
         }
 
@@ -10123,6 +10449,12 @@
           const result = await parseRSSAndFindEpisode(feedUrl, '');
           if (!result.ok) {
             console.log('[HJ:podcast] loadRSSFeed failure', { feedUrl, reason: result.reason, detail: result.detail });
+            failedLoad('feed-parse', result.reason === 'fetch_failed'
+              ? 'The feed was blocked by CORS on every proxy — the host may be unreachable'
+              : result.reason === 'parse_error'
+                ? 'The feed came back as malformed XML'
+                : 'The feed parsed but had no playable episodes',
+              result.detail || '');
             if (result.reason === 'fetch_failed') {
               showToast('Feed blocked by CORS — host may not be reachable');
             } else if (result.reason === 'parse_error') {
@@ -10162,6 +10494,7 @@
           setUrl(''); // Clear URL after successful load
           showToast('Podcast loaded!');
         } catch (error) {
+          failedLoad('exception', 'The RSS load threw before it could finish', error?.message || String(error));
           showToast('Failed to load RSS feed');
         }
 
@@ -10409,6 +10742,7 @@
       };
 
       const loadMedia = async () => {
+        beginLoadTrace(url);
         const urlType = detectUrlType(url);
 
         // Check for duplicates before any fetching/embed-init work.
@@ -10430,6 +10764,7 @@
         if (urlType === 'youtube') {
           const id = extractVideoId(url);
           if (!id) {
+            failedLoad('parse', 'Recognised as YouTube, but no video id could be read out of the URL');
             showToast('Invalid YouTube URL');
             return;
           }
@@ -10496,6 +10831,7 @@
         } else if (urlType === 'xvideo') {
           const info = extractXVideoInfo(url);
           if (!info) {
+            failedLoad('parse', 'Recognised as X.com, but no tweet or broadcast id could be read out of the URL');
             showToast('Invalid X.com URL — paste a tweet or broadcast link');
             return;
           }
@@ -10577,9 +10913,26 @@
           } catch (e) {
             // Fetch failed, fall through to error
           }
+          failedLoad('unrecognised', 'Not a YouTube, Spotify, X, audio or RSS URL, and fetching it did not return feed XML either');
           showToast('Please enter a YouTube, Spotify, Substack, or RSS feed URL');
         }
       };
+
+      // Retrying a saved failure from the library. loadMedia reads the URL off
+      // component state rather than taking it as an argument, so the URL is set
+      // first and the load fires on the next render, once that state has landed.
+      const [retryArmed, setRetryArmed] = useState(false);
+      useEffect(() => {
+        if (!retryLink) return;
+        setUrl(retryLink.url);
+        setRetryArmed(true);
+        onRetryConsumed();
+      }, [retryLink]);
+      useEffect(() => {
+        if (!retryArmed || !url) return;
+        setRetryArmed(false);
+        loadMedia();
+      }, [retryArmed, url]);
 
       // Text note functions
       const openTextNote = () => {
@@ -12057,12 +12410,16 @@
     });
 
     // Library View Component
-    function LibraryView({ sources, notes, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, setSources, setNotes, showToast, activeTab }) {
+    function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, setSources, setNotes, showToast, activeTab }) {
       const [searchQuery, setSearchQuery] = React.useState('');
       const [searchOpen, setSearchOpen] = React.useState(false);
       const searchInputRef = React.useRef(null);
       // Multi-select read-status filter ('unread' | 'inProgress' | 'read'); empty = show all
       const [statusFilter, setStatusFilter] = React.useState([]);
+      // The panel opens by default: a link you'd otherwise have lost is the whole
+      // point of it, so it should not need finding. Its list is height-capped in
+      // CSS, so an open panel never buries the library.
+      const [failedOpen, setFailedOpen] = React.useState(true);
       const [filterOpen, setFilterOpen] = React.useState(false);
       const filterRef = React.useRef(null);
       // Source pending a delete-or-move-to-today decision (recycle bin button)
@@ -12191,6 +12548,7 @@
           exportedAt: new Date().toISOString(),
           sources: cleanSources,
           notes: notes,
+          failedLinks: failedLinks,
           positions: {
             reader: readerPositions,
             media: mediaPositions
@@ -12266,6 +12624,9 @@
 
                 setSources(data.sources);
                 setNotes(data.notes);
+                // Absent in a pre-v1.59 export, and in a single-source one. Leave
+                // the current list alone rather than clearing it in that case.
+                if (Array.isArray(data.failedLinks)) setFailedLinks(data.failedLinks);
 
                 // Restore saved positions if available (version 2+)
                 if (data.positions) {
@@ -12366,6 +12727,68 @@
               )}
             </div>
           </div>
+
+          {failedLinks && failedLinks.length > 0 && (
+            <div className="failed-links-panel">
+              <div className="failed-links-header" onClick={() => setFailedOpen(open => !open)}>
+                <span className="failed-links-count">{failedLinks.length}</span>
+                <span>Unloaded links</span>
+                <button
+                  className="note-action-btn"
+                  style={{ marginLeft: 'auto' }}
+                  title="Copy every report — URL, where it failed, and the trace of the attempt"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(failedLinks.map(formatFailedLinkReport).join('\n\n---\n\n'));
+                    showToast(`Copied ${failedLinks.length} report${failedLinks.length !== 1 ? 's' : ''}`);
+                  }}
+                >
+                  <Icons.Copy /> All reports
+                </button>
+                <span style={{ color: 'var(--text-muted)' }}>{failedOpen ? '▾' : '▸'}</span>
+              </div>
+              {failedOpen && (
+                <div className="failed-links-list">
+                  {failedLinks.map(entry => (
+                    <div key={entry.id} className="failed-link-item">
+                      <div className="failed-link-url">{entry.url}</div>
+                      <div className="failed-link-reason">{entry.reason}</div>
+                      <div className="failed-link-meta">
+                        {entry.view === 'media' ? 'Player' : 'Reader'} · {entry.stage} · {entry.attempts} attempt{entry.attempts !== 1 ? 's' : ''} · {new Date(entry.lastFailedAt).toLocaleString()}
+                      </div>
+                      <div className="failed-link-actions">
+                        <button className="note-action-btn" onClick={() => retryFailedLink(entry)} title="Try loading it again">
+                          <Icons.Recycle /> Retry
+                        </button>
+                        <button
+                          className="note-action-btn"
+                          onClick={() => { navigator.clipboard.writeText(entry.url); showToast('Link copied'); }}
+                          title="Copy just the URL"
+                        >
+                          <Icons.Link /> Link
+                        </button>
+                        <button
+                          className="note-action-btn"
+                          onClick={() => { navigator.clipboard.writeText(formatFailedLinkReport(entry)); showToast('Report copied'); }}
+                          title="Copy the URL, where it failed, and the trace of the attempt"
+                        >
+                          <Icons.Copy /> Report
+                        </button>
+                        <button
+                          className="note-action-btn delete"
+                          style={{ marginLeft: 'auto' }}
+                          onClick={() => removeFailedLink(entry.id)}
+                          title="Remove from this list"
+                        >
+                          <Icons.Trash />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {sources.length === 0 ? (
             <div className="empty-state">
