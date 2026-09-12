@@ -444,7 +444,10 @@ A failed fetch left it sitting there — but a tab change, a remount (both views
 keyed on `currentSource`), or a reload threw it away, so the cost of a failure was
 retyping the link from wherever it came from. Every failure path now calls
 `recordFailedLink` instead, and the saved entries render as the **Unloaded links**
-panel at the top of the library, each with Retry / Link / Report / delete.
+panel at the top of the library, each with Retry / Link / Report / delete. The
+panel is **collapsed by default** — the count badge is what makes the backlog
+impossible to miss, so the entries don't sit between you and the library on every
+visit.
 
 Entries are keyed by `normalizeUrlKey`, so a retry updates one entry (bumping
 `attempts`) rather than piling up near-duplicates. `addSource` calls
