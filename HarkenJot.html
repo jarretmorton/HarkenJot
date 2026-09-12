@@ -1579,7 +1579,13 @@
     }
 
     .failed-links-list {
-      max-height: 40vh;
+      /* dvh, with a vh fallback, for the same reason .modal uses it: plain vh is
+         the *large* viewport, so with the URL bar showing the panel would claim
+         more of the screen than it appears to. Sized to clear three entries —
+         the realistic backlog — without an inner scroll; a longer list scrolls
+         here rather than pushing the library off the screen. */
+      max-height: 52vh;
+      max-height: 52dvh;
       overflow-y: auto;
       padding: 0 0.75rem 0.75rem;
       display: flex;
@@ -2528,7 +2534,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.59.0';
+    const APP_VERSION = '1.59.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
