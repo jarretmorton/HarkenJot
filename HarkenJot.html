@@ -1578,6 +1578,14 @@
       padding: 0.05rem 0.45rem;
     }
 
+    .failed-links-chevron {
+      display: flex;
+      align-items: center;
+      color: var(--text-secondary);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+
     .failed-links-list {
       /* dvh, with a vh fallback, for the same reason .modal uses it: plain vh is
          the *large* viewport, so with the URL bar showing the panel would claim
@@ -2525,6 +2533,10 @@
       FolderUp: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="m9 13 3-3 3 3"/></svg>,
       Check: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
       Dash: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="6" y1="12" x2="18" y2="12"/></svg>,
+      // Drawn at the same 14px as Trash/Copy so a disclosure control sits at the
+      // same visual weight as the buttons beside it. Rotated for the collapsed
+      // state rather than swapped for a second glyph.
+      Chevron: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
       Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
       Image: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>,
       NotebookLM: ({size = 16} = {}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><path d="M11.999 3.201C5.372 3.201 0 8.528 0 15.101V20.8h2.212v-.568c0-2.666 2.178-4.827 4.866-4.827 2.688 0 4.866 2.16 4.866 4.827v.568h2.212v-.568c0-3.877-3.17-7.019-7.078-7.019A7.075 7.075 0 0 0 2.992 14.5a7.355 7.355 0 0 1 6.568-4.016c4.057 0 7.347 3.264 7.347 7.287V20.8h2.212V17.77c0-5.235-4.28-9.481-9.56-9.481a9.563 9.563 0 0 0-6.217 2.28A9.795 9.795 0 0 1 12 5.393c5.406 0 9.788 4.346 9.788 9.707V20.8H24V15.1c-.001-6.573-5.373-11.9-12.001-11.9Z"/></svg>,
@@ -2534,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.59.1';
+    const APP_VERSION = '1.59.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -12416,10 +12428,11 @@
       const searchInputRef = React.useRef(null);
       // Multi-select read-status filter ('unread' | 'inProgress' | 'read'); empty = show all
       const [statusFilter, setStatusFilter] = React.useState([]);
-      // The panel opens by default: a link you'd otherwise have lost is the whole
-      // point of it, so it should not need finding. Its list is height-capped in
-      // CSS, so an open panel never buries the library.
-      const [failedOpen, setFailedOpen] = React.useState(true);
+      // Collapsed by default — the count badge is what makes the backlog
+      // impossible to miss, so the entries themselves don't need to sit between
+      // you and the library every time you open it. Expanded, the list is
+      // height-capped in CSS so it still can't bury what's below.
+      const [failedOpen, setFailedOpen] = React.useState(false);
       const [filterOpen, setFilterOpen] = React.useState(false);
       const filterRef = React.useRef(null);
       // Source pending a delete-or-move-to-today decision (recycle bin button)
@@ -12745,7 +12758,13 @@
                 >
                   <Icons.Copy /> All reports
                 </button>
-                <span style={{ color: 'var(--text-muted)' }}>{failedOpen ? '▾' : '▸'}</span>
+                <span
+                  className="failed-links-chevron"
+                  style={{ transform: failedOpen ? 'none' : 'rotate(-90deg)' }}
+                  aria-hidden="true"
+                >
+                  <Icons.Chevron />
+                </span>
               </div>
               {failedOpen && (
                 <div className="failed-links-list">
