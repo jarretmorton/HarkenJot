@@ -332,7 +332,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **ForumMagnum GraphQL** — `www.lesswrong.com/graphql`, `www.alignmentforum.org/graphql`, `forum.effectivealtruism.org/graphql`. `{post(input:{selector:{documentId:"<id>"}}){result{title,htmlBody}}}` returns the post body as clean HTML — no nav, no footer, no comments. Called from a **sandboxed iframe** (see below); also as a `?query=` GET through the proxy chain, which works because these servers run Apollo with `csrfPrevention: false`
 - **GreaterWrong** — `www.greaterwrong.com` / `ea.greaterwrong.com`, a server-rendered mirror of the same forums, fetched through the CORS proxy chain as the fallback when `/graphql` can't be reached. `?comments=false&hide-nav-bars=true` strips the page down to the post itself
 - **GitHub** — `raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>` for README and in-repo markdown source (a CDN, no rate limit, `Access-Control-Allow-Origin: *`), with `api.github.com/repos/<owner>/<repo>/readme` as the authority on whatever the README is actually called. Both CORS-enabled, so neither needs a proxy
-- **WordPress REST API** — `<origin>/wp-json/wp/v2/posts?slug=<slug>` for the canonical post body on any WordPress publisher. Asked **as JSONP first** (`&_jsonp=<callback>`, loaded as a `<script>` inside the sandboxed frame — see below), then as a direct fetch, then through the proxy chain
+- **WordPress REST API** — `<root>/wp-json/wp/v2/posts?slug=<slug>` for the canonical post body on any WordPress publisher, with `wp/v2/search` as the way to find a post that is not the `post` type. Asked **as JSONP first** (`&_jsonp=<callback>`, loaded as a `<script>` inside the sandboxed frame — see below), then as a direct fetch, then through the proxy chain. `<root>` is not always the origin — see **An empty array is not a missing API**
 - **Wiktionary / Wikipedia** — `en.wiktionary.org/api/rest_v1/page/definition/` and `en.wikipedia.org/api/rest_v1/page/summary/` (both CORS-enabled, fetched directly with 3 s timeouts) for the voice-triggered "explain \<term\>" lookup
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
@@ -702,6 +702,38 @@ Two rules it imposes:
   otherwise falls through to the remaining tiers. A site with JSONP *disabled*
   returns plain JSON, which parses as a harmless expression and simply never calls
   back — that resolves null on the timeout.
+
+**An empty array is not a missing API — it is usually the wrong root.**
+`<origin>/wp-json/wp/v2/posts?slug=…` is only correct for a single-site install.
+HPCwire is a subdirectory **multisite**: the article at
+`hpcwire.com/aiwire/2026/07/10/<slug>/` belongs to the *aiwire* site, whose REST
+API lives at `hpcwire.com/aiwire/wp-json/…`. The origin's own API is alive,
+reachable, and answers `[]` for that slug — which is why the tier looked like it
+worked while returning nothing, and why `[]` must never be read as "no WordPress
+here".
+
+`wpRestRoots(u)` derives the candidates: in a WP date permalink everything before
+the `/YYYY/MM/DD/` block is the site root, so each path prefix is a candidate,
+longest first (the subsite is the more specific answer), origin last. The walk is
+capped at three prefixes — every candidate costs a request. All candidates are
+asked **at once**, not in sequence, because a serial walk pays a timeout per miss.
+
+A root that replies at all — `[]` included — is recorded as `liveRoot`, and that
+is where the next two things look:
+
+- **A live API with no matching post usually means a custom post type.** News
+  sites routinely file syndicated or sponsored sections under one, and
+  `wp/v2/posts` never returns those. `wp/v2/search?subtype=any` spans every public
+  type; match its results on **path**, not the whole URL (the permalink it returns
+  can differ in scheme, `www`, or trailing slash), then fetch
+  `wp/v2/<subtype>/<id>`.
+- **A single-post endpoint returns an object, a collection returns an array.**
+  Both reach the same parsing, so unwrap by shape (`postIn`) rather than assuming
+  an array.
+
+Verified in Chromium against a server reproducing the HPCwire shape — no CORS
+headers anywhere, origin API alive but empty, the post only under the subsite —
+and against a custom-post-type variant reachable only through `wp/v2/search`.
 
 **ForumMagnum is the other user of the same frame.** ForumMagnum (LessWrong / Alignment Forum / EA Forum) sends
 `Access-Control-Allow-Origin` on `/graphql` only to its crosspost partner and to

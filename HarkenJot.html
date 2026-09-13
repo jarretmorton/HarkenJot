@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.61.0';
+    const APP_VERSION = '1.62.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -2581,6 +2581,34 @@
     // Identity key for "is this the same link?" — used by duplicate detection and
     // by the failed-link list, so a retry updates the entry it came from rather
     // than adding a second one that differs only by a trailing slash.
+    // Candidate WordPress REST roots for an article URL, most specific first.
+    //
+    // `<origin>/wp-json/…` is only right for a single-site install. HPCwire is a
+    // subdirectory MULTISITE: the article at
+    // hpcwire.com/aiwire/2026/07/10/<slug>/ belongs to the "aiwire" site, whose
+    // REST API lives at hpcwire.com/aiwire/wp-json/…, and the origin's own API
+    // answers `[]` for that slug — a WordPress install that is genuinely alive
+    // and genuinely does not have this post. That empty array is why the tier
+    // looked like it was working while returning nothing.
+    //
+    // The date block is the divider: in a WP date permalink everything before
+    // /YYYY/MM/DD/ is the site root, so each prefix is a candidate. Returns the
+    // longest prefix first, since the subsite is the more specific answer, with
+    // the bare origin last as the single-site case.
+    const wpRestRoots = (u) => {
+      const segs = u.pathname.split('/').filter(Boolean);
+      const dateAt = segs.findIndex((seg, i) =>
+        /^\d{4}$/.test(seg) && /^\d{2}$/.test(segs[i + 1] || '') && /^\d{2}$/.test(segs[i + 2] || ''));
+      const roots = [];
+      // Cap the walk: a deep path with no date block would otherwise generate a
+      // candidate per segment, and each candidate costs a request.
+      for (let n = Math.min(dateAt > 0 ? dateAt : 0, 3); n >= 1; n--) {
+        roots.push(`${u.origin}/${segs.slice(0, n).join('/')}`);
+      }
+      roots.push(u.origin);
+      return [...new Set(roots)];
+    };
+
     const normalizeUrlKey = (u) => (u || '').trim().toLowerCase().replace(/#.*$/, '').replace(/\/$/, '');
 
     // A failed link's report, shaped for pasting somewhere a person or an agent
@@ -6615,7 +6643,17 @@
               // WP post slugs are hyphenated words; skip files and odd paths
               const slug = segments[segments.length - 1];
               if (!/^[a-z0-9-]+$/i.test(slug)) return null;
-              const apiUrl = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+              // Which REST root, and which post type, is the whole problem here.
+              // See wpRestRoots: a subdirectory multisite serves this article from
+              // a subsite's own API, and the origin's API answers `[]` — alive,
+              // and genuinely without this post.
+              const roots = wpRestRoots(u);
+              const postsUrl = (root) =>
+                `${root}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+              // A collection endpoint returns an array, a single-post endpoint an
+              // object; both reach the parsing below, so unwrap by shape.
+              const postIn = (parsed) =>
+                Array.isArray(parsed) ? (parsed[0] || null) : (parsed && parsed.id ? parsed : null);
 
               // Tier 1: JSONP, from inside the sandboxed frame. First, not last,
               // because it is the only tier that leaves the reader's own browser
@@ -6624,22 +6662,77 @@
               // shipped and `rest_jsonp_enabled` defaults to true, so on a
               // WordPress publisher this usually just works; on anything else it
               // never calls back and falls through on its timeout.
+              //
+              // Every candidate root goes at once rather than in sequence: they
+              // are cheap, independent, and trying them serially would cost a
+              // timeout per miss.
               let raw = null;
-              const jsonp = await fetchJsonpViaNullOriginFrame((cb) => `${apiUrl}&_jsonp=${cb}`);
-              if (jsonp) {
-                // A reply is not the same as a post: a 404, a disabled route or a
-                // REST error all come back through the same callback. Only a
-                // non-empty array is the payload — anything else has to fall
-                // through to the tiers below rather than ending the search.
-                let hasPost = false;
-                try { const v = JSON.parse(jsonp); hasPost = Array.isArray(v) && v.length > 0; } catch (e) { /* not the payload */ }
-                if (hasPost) {
-                  raw = jsonp;
-                  console.log('[HJ:article] WordPress API via JSONP', { slug, chars: raw.length });
-                } else {
-                  console.log('[HJ:article] WordPress JSONP: replied, but no post in it');
+              let liveRoot = null;
+              const replies = await Promise.all(roots.map(async (root) => ({
+                root,
+                body: await fetchJsonpViaNullOriginFrame((cb) => `${postsUrl(root)}&_jsonp=${cb}`)
+              })));
+              for (const { root, body } of replies) {
+                if (!body) continue;
+                let parsed;
+                try { parsed = JSON.parse(body); } catch (e) { continue; }
+                // An empty array is still proof that a WordPress REST API answers
+                // at this root — worth remembering, because it is where the search
+                // fallback below should look.
+                if (!liveRoot && (Array.isArray(parsed) || parsed?.id)) liveRoot = root;
+                if (postIn(parsed)) {
+                  raw = body;
+                  console.log('[HJ:article] WordPress API via JSONP', { root, slug, chars: raw.length });
+                  break;
                 }
               }
+              if (!raw && liveRoot) console.log('[HJ:article] WordPress REST is live but has no such post', { liveRoot, slug });
+
+              // Tier 1b: a live API with no matching post usually means the post
+              // is not the `post` type — news sites routinely put syndicated or
+              // sponsored sections in a custom type, which wp/v2/posts never
+              // returns. wp/v2/search spans every public type and hands back the
+              // id and type of whatever actually owns this URL, which turns into
+              // a direct single-post fetch.
+              if (!raw && liveRoot) {
+                const searchUrl = `${liveRoot}/wp-json/wp/v2/search?search=${encodeURIComponent(slug.replace(/-/g, ' '))}` +
+                  `&subtype=any&per_page=20&_fields=id,url,type,subtype`;
+                const found = await fetchJsonpViaNullOriginFrame((cb) => `${searchUrl}&_jsonp=${cb}`);
+                let hit = null;
+                if (found) {
+                  try {
+                    const hits = JSON.parse(found);
+                    // Match on path, not the whole URL: the search result's
+                    // permalink can differ in scheme, www, or trailing slash.
+                    const wantPath = u.pathname.replace(/\/+$/, '');
+                    if (Array.isArray(hits)) {
+                      hit = hits.find((h) => {
+                        try { return new URL(h.url).pathname.replace(/\/+$/, '') === wantPath; }
+                        catch (e) { return false; }
+                      }) || null;
+                    }
+                  } catch (e) { /* not the payload */ }
+                }
+                if (hit && hit.id && hit.subtype) {
+                  console.log('[HJ:article] WordPress search located the post', { id: hit.id, type: hit.subtype });
+                  const byId = `${liveRoot}/wp-json/wp/v2/${encodeURIComponent(hit.subtype)}/${hit.id}?_fields=title,content,link`;
+                  const body = await fetchJsonpViaNullOriginFrame((cb) => `${byId}&_jsonp=${cb}`);
+                  let parsed;
+                  try { parsed = body ? JSON.parse(body) : null; } catch (e) { parsed = null; }
+                  if (postIn(parsed)) {
+                    raw = body;
+                    console.log('[HJ:article] WordPress API via JSONP (custom type)', { type: hit.subtype, chars: raw.length });
+                  } else {
+                    console.log('[HJ:article] WordPress: custom-type fetch returned no post', { type: hit.subtype });
+                  }
+                } else if (found) {
+                  console.log('[HJ:article] WordPress search: nothing matched this URL');
+                }
+              }
+
+              // Tiers 2 and 3 work against whichever root proved live, falling
+              // back to the most specific candidate if none answered at all.
+              const apiUrl = postsUrl(liveRoot || roots[0]);
 
               // Tier 2: direct. The WP REST API echoes the request Origin in its
               // CORS headers, so this works wherever the publisher's WAF lets a
@@ -6674,7 +6767,7 @@
                 if (salvaged) console.log('[HJ:article] WordPress API: salvaged article from non-JSON body', { chars: salvaged.text.length });
                 return salvaged;
               }
-              const post = Array.isArray(posts) ? posts[0] : null;
+              const post = postIn(posts);
               const bodyHtml = post?.content?.rendered || '';
               if (!bodyHtml || bodyHtml.length < 100) {
                 console.log('[HJ:article] WordPress API: no post content', { slug, posts: Array.isArray(posts) ? posts.length : typeof posts });
