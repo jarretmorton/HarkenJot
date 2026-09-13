@@ -321,9 +321,9 @@ loads on demand from `cdn.jsdelivr.net`.
 
 ### External APIs Consumed
 
-- **CORS proxies** — `corsproxy.io` (both the bare `?<url>` and the newer `?url=` forms), `api.allorigins.win`, `api.codetabs.com`, `thingproxy.freeboard.io` for fetching articles, RSS feeds, and oEmbed/scraped metadata
+- **CORS proxies** — `api.allorigins.win` (both the `/raw` and the JSON-enveloped `/get` shapes), `api.codetabs.com`, `proxy.killcors.com` and `test.cors.workers.dev` for fetching articles, RSS feeds, and oEmbed/scraped metadata; `thingproxy.freeboard.io` as a feed-only tail. **`corsproxy.io` is retired** — its free tier is now localhost-only and answers everyone else 403 (bare `?<url>` form) or 401 (`?url=` form). Do not add it back
 - **Jina Reader** — `r.jina.ai` as a fallback for article text extraction
-- **Wayback Machine** — `archive.org/wayback/available` to locate the closest snapshot, then `web.archive.org/web/<ts>id_/<url>` for the bytes as originally crawled (the `id_` modifier skips the injected toolbar). CORS-enabled, so no proxy needed
+- **Wayback Machine** — `archive.org/wayback/available` *and* `web.archive.org/cdx/search/cdx` (two hosts, two indexes, two CORS policies — asked concurrently because either may be the one that answers) to locate the closest snapshot, then `web.archive.org/web/<ts>id_/<url>` for the bytes as originally crawled (the `id_` modifier skips the injected toolbar). CORS-enabled, so normally no proxy needed
 - **archive.today** — `archive.ph` / `archive.is` `/newest/<url>` snapshots via the proxy chain; archived with a real browser, so these hold the rendered article for publishers that wall every proxy
 - **YouTube** — IFrame API for playback; `youtube.com/oembed` for video metadata
 - **Spotify oEmbed** — `open.spotify.com/oembed` for podcast/episode metadata
@@ -494,6 +494,18 @@ resolution takes and every failure reports against the URL that was actually typ
 
 ### Network Fetch Conventions
 
+**There is one proxy roster: `CORS_PROXIES`.** It used to be copy-pasted into six
+separate lists, which is how `corsproxy.io` stayed wired into every fetch path
+long after its free tier went localhost-only — two of the article chain's four
+racers were dead weight, and the chain had been running at half strength against
+every publisher. Retire or add a proxy in that one array and every caller
+follows; never re-inline a list. An entry owns how its own target URL is encoded
+(`test.cors.workers.dev` reads everything after `?` raw, so encoding it breaks
+it), and `corsProxyExtract` — not the caller's position in the array — is what
+unwraps an enveloping proxy. The Spotify scraper used to unwrap allorigins's JSON
+by testing "am I the last proxy?", which quietly broke the moment the roster grew
+a new tail.
+
 Every outbound fetch in the article/podcast pipelines must be bounded: use the
 shared top-level `fetchWithTimeout(url, ms, options)` (default 8 s; supports an
 external `options.signal` for race cancellation) — never a bare `fetch()`.
@@ -501,10 +513,31 @@ Multi-proxy attempts go through `raceStaggered(taskFns, {staggerMs})`, which
 starts task N after N×stagger (2–2.5 s), lets the first non-null result win, and
 aborts the losers — polite to free CORS proxies while bounding worst-case
 latency. `netHints` (persisted under the `net_hints` key) remembers the
-last-working proxy per host so it is tried first next time. In `fetchContent`'s
+last-working proxy per host so it is tried first next time.
+
+**8 s is the right timeout for a publisher's own origin, not for every route.**
+`fetchHtmlViaProxies(url, { timeoutMs })` takes a per-call bound, and the slow
+routes pass a longer one. archive.today renders its captures with a real browser
+and habitually takes 10–20 s through a proxy; at the default every archive
+attempt was aborted mid-flight, so the tier with the *best* odds on a walled
+publisher reported nothing while the snapshot sat there the whole time. The
+WordPress REST API is the same story in reverse — a WAF'd origin serving a full
+article's JSON (100–200 KB). Both now get 15 s. The article chain's stagger is
+2 s rather than 2.5 s so five racers cost about what four did. In `fetchContent`'s
 article fallbacks, Wayback/AMP/WordPress/Jina run concurrently but are awaited
 in preference order; Jina is only started after tier-1 extraction fails (its
 keyless tier is rate-limited).
+
+**archive.org being unreachable is not the same as there being no snapshot.**
+Both the availability API and the snapshot fetch can die as a bare
+`Failed to fetch` — no CORS headers, or the browser cannot reach archive.org at
+all — and from inside the pipeline that is indistinguishable from "never
+captured". So snapshot discovery asks two independent hosts, and if the direct
+snapshot fetch still fails the tier spends **one** proxied attempt (at the known
+timestamp, or at the `/web/2/` redirect form when discovery itself was
+unreachable). Direct-first is still the point of the tier: archive.org survives
+the WAF that blocks the proxies, so the proxy is the recovery path, never the
+default.
 
 **A bot wall is not an article.** WAF challenge pages (PerimeterX, Cloudflare,
 "access denied" shells) come back as HTTP 200 with enough boilerplate to clear

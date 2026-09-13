@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.59.2';
+    const APP_VERSION = '1.60.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -2921,6 +2921,48 @@
         this.save();
       }
     };
+
+    // The CORS proxy roster, in one place.
+    //
+    // It used to be copy-pasted into six separate lists, which is how
+    // corsproxy.io stayed wired into every fetch path long after it stopped
+    // working: its free tier is now localhost-only and answers everyone else
+    // 403 (bare `?<url>` form) or 401 (`?url=` form), so two of the article
+    // chain's four racers were dead weight and the chain had been running at
+    // half strength against every publisher. Add or retire a proxy HERE and
+    // every caller follows — never re-inline a list.
+    //
+    // Each entry owns how its own target URL is encoded, so callers never build a
+    // proxy URL by hand. The one flag a caller has to honour is `json`: that body
+    // comes back inside an envelope and has to be unwrapped with corsProxyExtract.
+    const CORS_PROXIES = [
+      { name: 'allorigins/raw', url: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+      { name: 'codetabs', url: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
+      // Same service as allorigins/raw but a different code path: /get buffers the
+      // whole page and re-encodes it as JSON, which is measurably slower and the
+      // shape that times out first on a slow origin. Worth keeping as a second
+      // chance, not worth leading with.
+      { name: 'allorigins/get', url: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, json: true },
+      { name: 'killcors', url: (u) => `https://proxy.killcors.com/?url=${encodeURIComponent(u)}` },
+      // Zibri's public cloudflare-cors-anywhere demo: keyless, and it reads
+      // everything after `?` as the target, so the URL must NOT be encoded here —
+      // percent-escaping it makes the worker fetch the literal escaped string.
+      // Last in the roster on purpose: it is a courtesy demo, so it only ever
+      // carries the traffic the maintained proxies have already lost.
+      { name: 'cors.workers.dev', url: (u) => `https://test.cors.workers.dev/?${u}` }
+    ];
+
+    // Unwrap a proxy response body. Only the enveloping proxies need this; every
+    // other one hands back the origin's bytes unchanged.
+    const corsProxyExtract = (proxy, text) => {
+      if (!proxy.json) return text;
+      try { return JSON.parse(text).contents || ''; } catch (e) { return ''; }
+    };
+
+    // The roster as plain URL builders, for the call sites that loop over
+    // functions rather than descriptors. Enveloping proxies are dropped — those
+    // sites have no way to unwrap one.
+    const corsProxyBuilders = () => CORS_PROXIES.filter(p => !p.json).map(p => p.url);
 
     // Reorder a proxy list so the remembered last-working proxy for this host goes first.
     const orderByPreferred = (list, host) => {
@@ -6293,11 +6335,7 @@
 
         // Helper: fetch URL as PDF binary data (direct + CORS proxy fallback)
         const fetchPdfBinary = async (pdfUrl) => {
-          const proxies = [
-            (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-            (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-            (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          ];
+          const proxies = corsProxyBuilders();
 
           let pdfData;
 
@@ -6362,34 +6400,16 @@
           // while the pipeline goes looking for something better.
           const THIN_ARTICLE_CHARS = 900;
 
-          // Helper: fetch HTML via CORS proxies
-          const fetchHtmlViaProxies = async (targetUrl) => {
-            const corsProxies = [
-              {
-                name: 'allorigins',
-                url: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-                extract: (data) => data.contents
-              },
-              {
-                name: 'corsproxy.io',
-                url: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-                extract: (data) => data
-              },
-              {
-                // corsproxy.io moved to a named ?url= parameter; the bare form
-                // above still answers for some callers but not reliably, so both
-                // shapes are in the race.
-                name: 'corsproxy.io/url',
-                url: (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-                extract: (data) => data
-              },
-              {
-                name: 'codetabs',
-                url: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-                extract: (data) => data
-              }
-            ];
-
+          // Helper: fetch HTML via CORS proxies. The roster lives at top level in
+          // CORS_PROXIES — see the note there about why it is not inlined here.
+          //
+          // timeoutMs is per attempt and defaults to the 8s that suits a
+          // publisher's own origin. Routes that are slow by nature pass a longer
+          // one: archive.today renders its captures with a real browser and
+          // habitually takes well over 8s to answer, so every archive attempt was
+          // being aborted mid-flight and the tier with the best odds on a walled
+          // publisher never got to return anything.
+          const fetchHtmlViaProxies = async (targetUrl, { timeoutMs = 8000 } = {}) => {
             // Returns true when a string appears to be binary/compressed data rather than
             // readable text. TextDecoder replaces invalid UTF-8 byte sequences with U+FFFD;
             // a high density of replacement chars or C0 control chars indicates raw bytes.
@@ -6458,26 +6478,20 @@
               try { return new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname; }
               catch (e) { return ''; }
             })();
-            const orderedProxies = orderByPreferred(corsProxies, targetHost);
+            const orderedProxies = orderByPreferred(CORS_PROXIES, targetHost);
             return await raceStaggered(orderedProxies.map((proxy) => async (signal) => {
               try {
                 console.log(`Trying ${proxy.name} proxy for ${targetUrl}...`);
                 const proxyUrl = proxy.url(targetUrl);
-                const response = await fetchWithTimeout(proxyUrl, 8000, { signal });
+                const response = await fetchWithTimeout(proxyUrl, timeoutMs, { signal });
                 if (!response.ok) throw new Error(`${proxy.name} returned ${response.status}`);
-                let html;
-                if (proxy.name === 'allorigins') {
-                  const data = await response.json();
-                  html = proxy.extract(data);
-                  // allorigins may occasionally return raw compressed bytes in contents
-                  if (html && looksLikeBinary(html)) {
-                    const buf = new TextEncoder().encode(html).buffer;
-                    const decompressed = await tryDecompress(buf, 'brotli') || await tryDecompress(buf, 'gzip');
-                    if (decompressed && !looksLikeBinary(decompressed)) html = decompressed;
-                  }
-                } else {
-                  const text = await decodeBody(response);
-                  html = proxy.extract(text);
+                let html = corsProxyExtract(proxy, await decodeBody(response));
+                // An enveloping proxy can hand back raw compressed bytes inside the
+                // envelope, where the browser never got a chance to decompress them.
+                if (proxy.json && html && looksLikeBinary(html)) {
+                  const buf = new TextEncoder().encode(html).buffer;
+                  const decompressed = await tryDecompress(buf, 'brotli') || await tryDecompress(buf, 'gzip');
+                  if (decompressed && !looksLikeBinary(decompressed)) html = decompressed;
                 }
                 if (html && html.length > 100 && !looksLikeBinary(html)) {
                   console.log(`[HJ:net] ${proxy.name} → ${targetUrl} succeeded (${html.length} chars)`);
@@ -6490,7 +6504,7 @@
                 console.log(`[HJ:net] ${proxy.name} → ${targetUrl} failed:`, error.message);
                 return null;
               }
-            }), { staggerMs: 2500 });
+            }), { staggerMs: 2000 });
           };
 
           // Helper: try to extract article content from HTML, returns null if insufficient
@@ -6546,7 +6560,10 @@
               } catch (e) {
                 console.log('[HJ:article] WordPress API direct failed:', e?.message || e);
               }
-              if (!raw) raw = await fetchHtmlViaProxies(apiUrl);
+              // 15s, not the default 8s: this is a WAF'd origin serving a
+              // full article's JSON (100-200KB), and at 8s every proxied attempt
+              // was aborted mid-transfer instead of returning the post.
+              if (!raw) raw = await fetchHtmlViaProxies(apiUrl, { timeoutMs: 15000 });
               if (!raw) return null;
 
               let posts;
@@ -6665,25 +6682,55 @@
           // rewritten asset URLs for the extractor to trip over.
           const fetchWayback = async () => {
             const target = url.startsWith('http') ? url : 'https://' + url;
-            let snapshotUrl = null;
-            try {
-              const probe = await fetchWithTimeout(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, 8000);
-              if (probe.ok) {
+
+            // Snapshot discovery, two independent ways. /wayback/available lives on
+            // archive.org and answers without CORS headers often enough that the
+            // fetch dies as a bare "Failed to fetch" — indistinguishable, from here,
+            // from the article having no capture at all. The CDX server is a
+            // different host (web.archive.org) with its own CORS policy and its own
+            // index, so when one is unreachable the other frequently is not. Asked
+            // together rather than in sequence: both are cheap, and the whole point
+            // is that either may be the one that answers.
+            const viaAvailability = (async () => {
+              try {
+                const probe = await fetchWithTimeout(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, 8000);
+                if (!probe.ok) return null;
                 const data = await probe.json();
                 const snap = data?.archived_snapshots?.closest;
-                if (snap?.available && snap.timestamp) {
-                  snapshotUrl = `https://web.archive.org/web/${snap.timestamp}id_/${target}`;
-                  console.log('[HJ:article] Wayback snapshot', snap.timestamp);
-                } else {
-                  console.log('[HJ:article] Wayback: no snapshot on record');
-                }
+                if (snap?.available && snap.timestamp) return snap.timestamp;
+                console.log('[HJ:article] Wayback: no snapshot on record');
+              } catch (e) {
+                console.log('[HJ:article] Wayback availability lookup failed:', e?.message || e);
               }
-            } catch (e) {
-              console.log('[HJ:article] Wayback availability lookup failed:', e?.message || e);
-            }
-            // Fall back to the redirect form even when the API said nothing — its
-            // index lags, and /web/2/ sometimes resolves a capture the API misses.
-            for (const candidate of [snapshotUrl, `https://web.archive.org/web/2/${target}`].filter(Boolean)) {
+              return null;
+            })();
+            // limit=-1 asks the CDX index for the most recent capture rather than
+            // the oldest, which is what "closest" means for a news article.
+            const viaCdx = (async () => {
+              try {
+                const cdx = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&output=json&fl=timestamp&filter=statuscode:200&limit=-1`;
+                const probe = await fetchWithTimeout(cdx, 8000);
+                if (!probe.ok) return null;
+                const rows = await probe.json();
+                // Row 0 is the column header; a bare header means no capture.
+                const ts = Array.isArray(rows) && rows.length > 1 ? rows[rows.length - 1][0] : null;
+                return /^\d{14}$/.test(ts || '') ? ts : null;
+              } catch (e) {
+                console.log('[HJ:article] Wayback CDX lookup failed:', e?.message || e);
+              }
+              return null;
+            })();
+
+            const timestamps = [...new Set((await Promise.all([viaAvailability, viaCdx])).filter(Boolean))];
+            if (timestamps.length) console.log('[HJ:article] Wayback snapshot', timestamps.join(', '));
+
+            // Fall back to the redirect form even when both lookups said nothing —
+            // the indexes lag, and /web/2/ sometimes resolves a capture they miss.
+            const candidates = [
+              ...timestamps.map(ts => `https://web.archive.org/web/${ts}id_/${target}`),
+              `https://web.archive.org/web/2/${target}`
+            ];
+            for (const candidate of candidates) {
               try {
                 console.log('Trying Wayback Machine:', candidate);
                 const response = await fetchWithTimeout(candidate, 12000);
@@ -6696,6 +6743,22 @@
               } catch (e) {
                 console.log(`[HJ:article] Wayback failed (${candidate}):`, e.message);
               }
+            }
+            // Everything above this line talks to archive.org directly, which is the
+            // point of the tier — archive.org sends CORS headers, so it survives the
+            // WAF that blocks the proxies. But when the direct route fails as a bare
+            // "Failed to fetch" the browser could not reach archive.org *at all*,
+            // and a walled publisher is then losing its best fallback to a problem
+            // that has nothing to do with the publisher. One proxied attempt at the
+            // snapshot we know about — or at the redirect form, when discovery was
+            // itself unreachable and we know of none — is worth that.
+            const proxiedCandidate = timestamps.length
+              ? `https://web.archive.org/web/${timestamps[0]}id_/${target}`
+              : `https://web.archive.org/web/2/${target}`;
+            const proxied = tryExtractArticle(await fetchHtmlViaProxies(proxiedCandidate, { timeoutMs: 15000 }));
+            if (proxied) {
+              console.log('[HJ:article] Wayback via proxy chain', { chars: proxied.text.length });
+              return proxied;
             }
             return null;
           };
@@ -6713,12 +6776,18 @@
           // after the other, which meant a dead first mirror cost a full proxy chain
           // (~15s) before the second one even started; raced with a short stagger,
           // the tier costs about what one mirror costs.
+          //
+          // The per-attempt timeout is deliberately far longer than the default.
+          // archive.today serves its captures from a browser-rendered store and
+          // routinely takes 10-20s through a proxy; at the default 8s every
+          // attempt was aborted before an answer, so the tier reported nothing
+          // while the snapshot sat there the whole time.
           const tryArchiveToday = async () => {
             const target = url.startsWith('http') ? url : 'https://' + url;
             return await raceStaggered(['archive.ph', 'archive.is'].map((host) => async () => {
               try {
                 console.log(`Trying ${host}...`);
-                const html = await fetchHtmlViaProxies(`https://${host}/newest/${target}`);
+                const html = await fetchHtmlViaProxies(`https://${host}/newest/${target}`, { timeoutMs: 15000 });
                 const result = tryExtractArticle(html);
                 if (result && result.text.length >= 300) {
                   console.log('[HJ:article] archive.today success', { host, chars: result.text.length });
@@ -7226,14 +7295,13 @@
                 // Two proxies, not one. This used to be a single call through
                 // corsproxy.io's bare `?<url>` form; that form stopped answering
                 // dependably, and its failure made every unrecognised custom-domain
-                // Substack look like an ordinary blog with a /p/ path.
-                apiResponse = await raceStaggered([
-                  `https://corsproxy.io/?url=${encodeURIComponent(apiUrl)}`,
-                  `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`,
-                ].map((probeUrl) => async (signal) => {
+                // Substack look like an ordinary blog with a /p/ path. Taken off
+                // the head of the shared roster so a retirement there reaches the
+                // probe too, rather than leaving it pointing at a dead proxy again.
+                apiResponse = await raceStaggered(CORS_PROXIES.slice(0, 2).map((proxy) => async (signal) => {
                   try {
-                    const r = await fetchWithTimeout(probeUrl, 6000, { signal });
-                    return r.ok ? await r.text() : null;
+                    const r = await fetchWithTimeout(proxy.url(apiUrl), 6000, { signal });
+                    return r.ok ? corsProxyExtract(proxy, await r.text()) : null;
                   } catch (e) { return null; }
                 }), { staggerMs: 1500 });
               }
@@ -9242,12 +9310,7 @@
         try {
           const token = ((Number(tweetId) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
           const endpoint = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetId}&token=${token}&lang=en`;
-          const transports = [
-            (u) => u,
-            (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-            (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-            (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-          ];
+          const transports = [(u) => u, ...corsProxyBuilders()];
           let data = null;
           for (const wrap of transports) {
             try {
@@ -9421,12 +9484,11 @@
       // (the episode), then og:tag parsing.
       const fetchSpotifyPageMetadata = async (spotifyUrl) => {
         const cleanUrl = cleanSpotifyUrl(spotifyUrl);
-        const proxies = [
-          (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-          (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-          (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-          (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`
-        ];
+        // Descriptors, not bare builders: this path used to unwrap allorigins's
+        // JSON envelope by position ("if this is the last proxy"), which silently
+        // broke the moment the roster grew a new tail. corsProxyExtract asks the
+        // proxy what shape it returns instead.
+        const proxies = CORS_PROXIES;
 
         // Bot-block/consent/web-player pages yield constant junk like
         // "Spotify" or "Web Player: Musik für alle" — never real names.
@@ -9466,16 +9528,12 @@
         const scrapeAttempt = async (target, i, signal) => {
           const label = `${target.kind}-scrape proxy ${i}`;
           try {
-            const response = await fetchWithTimeout(proxies[i](target.url), 8000, { signal });
+            const response = await fetchWithTimeout(proxies[i].url(target.url), 8000, { signal });
             if (!response.ok) {
               console.log(`[HJ:podcast] ${label}: http ${response.status}`);
               return null;
             }
-            let html = await response.text();
-            // allorigins/get returns JSON {contents}
-            if (i === proxies.length - 1) {
-              try { html = JSON.parse(html).contents || ''; } catch { html = ''; }
-            }
+            const html = corsProxyExtract(proxies[i], await response.text());
             if (!html || html.length < 200) {
               console.log(`[HJ:podcast] ${label}: short response (${html?.length || 0} bytes)`);
               return null;
@@ -10040,18 +10098,15 @@
         }
 
         const fetchStrategies = [
-          { name: 'direct',          build: (u) => u, extract: (t) => t },
-          { name: 'allorigins/raw',  build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, extract: (t) => t },
-          { name: 'corsproxy/legacy',build: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`, extract: (t) => t },
-          { name: 'corsproxy/url',   build: (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`, extract: (t) => t },
-          { name: 'codetabs',        build: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, extract: (t) => t },
-          { name: 'cors.lol',        build: (u) => `https://api.cors.lol/?url=${encodeURIComponent(u)}`, extract: (t) => t },
-          { name: 'thingproxy',      build: (u) => `https://thingproxy.freeboard.io/fetch/${u}`, extract: (t) => t },
-          {
-            name: 'allorigins/get',
-            build: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-            extract: (t) => { try { return JSON.parse(t).contents || ''; } catch { return ''; } }
-          }
+          { name: 'direct', build: (u) => u, extract: (t) => t },
+          ...CORS_PROXIES.map(proxy => ({
+            name: proxy.name,
+            build: proxy.url,
+            extract: (t) => corsProxyExtract(proxy, t)
+          })),
+          // Feed-only tail. thingproxy caps bodies at 100KB, which truncates a
+          // long archive but is fine for the small feeds that reach it last.
+          { name: 'thingproxy', build: (u) => `https://thingproxy.freeboard.io/fetch/${u}`, extract: (t) => t }
         ];
 
         const isXmlFeed = (text) => text && (text.includes('<channel') || text.includes('<feed') || text.trimStart().startsWith('<?xml'));
@@ -10903,11 +10958,7 @@
         } else {
           // Unknown URL type - try loading as RSS feed before giving up
           try {
-            const corsProxies = [
-              (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-              (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-              (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-            ];
+            const corsProxies = corsProxyBuilders();
             let text = null;
             for (const proxy of corsProxies) {
               try {
