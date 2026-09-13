@@ -321,7 +321,7 @@ loads on demand from `cdn.jsdelivr.net`.
 
 ### External APIs Consumed
 
-- **CORS proxies** — `api.allorigins.win` (both the `/raw` and the JSON-enveloped `/get` shapes), `api.codetabs.com`, `proxy.killcors.com` and `test.cors.workers.dev` for fetching articles, RSS feeds, and oEmbed/scraped metadata; `thingproxy.freeboard.io` as a feed-only tail. **`corsproxy.io` is retired** — its free tier is now localhost-only and answers everyone else 403 (bare `?<url>` form) or 401 (`?url=` form). Do not add it back
+- **CORS proxies** — `api.allorigins.win` (both the `/raw` and the JSON-enveloped `/get` shapes) and `api.codetabs.com` for fetching articles, RSS feeds, and oEmbed/scraped metadata; `thingproxy.freeboard.io` as a feed-only tail. **Three are retired and must not be re-proposed**: `corsproxy.io` (both shapes — its free tier is localhost-only and answers everyone else 403/401), `proxy.killcors.com` and `test.cors.workers.dev`. The last two were added on their documentation and then failed *every* request in the field with a bare "Failed to fetch" — the hosts themselves were unreachable from a browser, not blocked by any particular target. A proxy that never answers is not free: it holds a slot in the staggered race and pushes the working proxies back. Do not re-add any of them without a live request proving otherwise
 - **Jina Reader** — `r.jina.ai` as a fallback for article text extraction
 - **Wayback Machine** — `archive.org/wayback/available` *and* `web.archive.org/cdx/search/cdx` (two hosts, two indexes, two CORS policies — asked concurrently because either may be the one that answers) to locate the closest snapshot, then `web.archive.org/web/<ts>id_/<url>` for the bytes as originally crawled (the `id_` modifier skips the injected toolbar). CORS-enabled, so normally no proxy needed
 - **archive.today** — `archive.ph` / `archive.is` `/newest/<url>` snapshots via the proxy chain; archived with a real browser, so these hold the rendered article for publishers that wall every proxy
@@ -332,6 +332,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **ForumMagnum GraphQL** — `www.lesswrong.com/graphql`, `www.alignmentforum.org/graphql`, `forum.effectivealtruism.org/graphql`. `{post(input:{selector:{documentId:"<id>"}}){result{title,htmlBody}}}` returns the post body as clean HTML — no nav, no footer, no comments. Called from a **sandboxed iframe** (see below); also as a `?query=` GET through the proxy chain, which works because these servers run Apollo with `csrfPrevention: false`
 - **GreaterWrong** — `www.greaterwrong.com` / `ea.greaterwrong.com`, a server-rendered mirror of the same forums, fetched through the CORS proxy chain as the fallback when `/graphql` can't be reached. `?comments=false&hide-nav-bars=true` strips the page down to the post itself
 - **GitHub** — `raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>` for README and in-repo markdown source (a CDN, no rate limit, `Access-Control-Allow-Origin: *`), with `api.github.com/repos/<owner>/<repo>/readme` as the authority on whatever the README is actually called. Both CORS-enabled, so neither needs a proxy
+- **WordPress REST API** — `<root>/wp-json/wp/v2/posts?slug=<slug>` for the canonical post body on any WordPress publisher, with `wp/v2/search` as the way to find a post that is not the `post` type. Asked **as JSONP first** (`&_jsonp=<callback>`, loaded as a `<script>` inside the sandboxed frame — see below), then as a direct fetch, then through the proxy chain. `<root>` is not always the origin — see **An empty array is not a missing API**
 - **Wiktionary / Wikipedia** — `en.wiktionary.org/api/rest_v1/page/definition/` and `en.wikipedia.org/api/rest_v1/page/summary/` (both CORS-enabled, fetched directly with 3 s timeouts) for the voice-triggered "explain \<term\>" lookup
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
 - **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
@@ -672,8 +673,69 @@ archive's, so a snapshot is the likeliest thing to survive. When every route
 fails on a bot-walled host the toast names the host rather than claiming the
 content could not be extracted — nothing was ever fetched to extract.
 
-**A sandboxed iframe has a different origin than this page, and that is the whole
-trick for LessWrong.** ForumMagnum (LessWrong / Alignment Forum / EA Forum) sends
+**A sandboxed iframe is the app's escape hatch from both CORS and the WAF**, and it
+now carries two routes. `runInNullOriginFrame(body, ms)` is the shared plumbing —
+it builds an `<iframe sandbox="allow-scripts">`, runs `body` inside it, resolves
+with the one string that frame posts back under a random token, and always removes
+the frame. `fetchViaNullOriginFrame` and `fetchJsonpViaNullOriginFrame` are the two
+snippets it runs.
+
+**JSONP is the route that beats a publisher which walls datacenter IPs.** HPCwire
+answered every CORS proxy with a challenge page or a timeout, and answered a direct
+fetch with a bare `Failed to fetch` (no `Access-Control-Allow-Origin` at all). A
+`<script src>` is subject to neither: not to CORS, and not to the WAF, because the
+request leaves the *reader's own browser* — their IP, their real user-agent.
+WordPress core has served `?_jsonp=<callback>` since the REST API shipped and
+`rest_jsonp_enabled` defaults to true, so this is a general route on any WP
+publisher, not a per-site hack.
+
+Two rules it imposes:
+
+- **It runs the publisher's JavaScript, so it runs in the same opaque-origin
+  sandbox.** No `allow-same-origin` means that script cannot reach this page's DOM,
+  `localStorage`, or IndexedDB. Verified in Chromium against a deliberately hostile
+  JSONP body: parent DOM read *and* write blocked, storage blocked, `origin` is
+  `null`, notes untouched. **Never "simplify" this by appending the script tag to
+  the main document** — that hands a publisher script this app's origin.
+- **A reply is not a post.** A 404, a disabled route or any REST error comes back
+  through the same callback, so the caller accepts only a non-empty array and
+  otherwise falls through to the remaining tiers. A site with JSONP *disabled*
+  returns plain JSON, which parses as a harmless expression and simply never calls
+  back — that resolves null on the timeout.
+
+**An empty array is not a missing API — it is usually the wrong root.**
+`<origin>/wp-json/wp/v2/posts?slug=…` is only correct for a single-site install.
+HPCwire is a subdirectory **multisite**: the article at
+`hpcwire.com/aiwire/2026/07/10/<slug>/` belongs to the *aiwire* site, whose REST
+API lives at `hpcwire.com/aiwire/wp-json/…`. The origin's own API is alive,
+reachable, and answers `[]` for that slug — which is why the tier looked like it
+worked while returning nothing, and why `[]` must never be read as "no WordPress
+here".
+
+`wpRestRoots(u)` derives the candidates: in a WP date permalink everything before
+the `/YYYY/MM/DD/` block is the site root, so each path prefix is a candidate,
+longest first (the subsite is the more specific answer), origin last. The walk is
+capped at three prefixes — every candidate costs a request. All candidates are
+asked **at once**, not in sequence, because a serial walk pays a timeout per miss.
+
+A root that replies at all — `[]` included — is recorded as `liveRoot`, and that
+is where the next two things look:
+
+- **A live API with no matching post usually means a custom post type.** News
+  sites routinely file syndicated or sponsored sections under one, and
+  `wp/v2/posts` never returns those. `wp/v2/search?subtype=any` spans every public
+  type; match its results on **path**, not the whole URL (the permalink it returns
+  can differ in scheme, `www`, or trailing slash), then fetch
+  `wp/v2/<subtype>/<id>`.
+- **A single-post endpoint returns an object, a collection returns an array.**
+  Both reach the same parsing, so unwrap by shape (`postIn`) rather than assuming
+  an array.
+
+Verified in Chromium against a server reproducing the HPCwire shape — no CORS
+headers anywhere, origin API alive but empty, the post only under the subsite —
+and against a custom-post-type variant reachable only through `wp/v2/search`.
+
+**ForumMagnum is the other user of the same frame.** ForumMagnum (LessWrong / Alignment Forum / EA Forum) sends
 `Access-Control-Allow-Origin` on `/graphql` only to its crosspost partner and to
 the opaque origin `"null"` — a deliberate, documented allowance for its
 customizable home page, which runs user code in a `srcdoc` frame. So a plain
@@ -697,6 +759,15 @@ return `htmlBody`, so AF URLs ask lesswrong.com first. GreaterWrong HTML is
 *sliced* at `.body-text.post-body` (falling back to `main.post`) before extraction
 — its comment tree lives outside `<main>` in `#comments`, and the title has to be
 read off `h1.post-title` because the sliced fragment carries no title metadata.
+
+**Say what came back, not just that it was wrong.** `fetchHtmlViaProxies` reports
+"succeeded" for any body over 100 chars, so a WAF challenge page served at HTTP 200
+reaches the caller looking exactly like a real payload. The WordPress tier used to
+log a bare `returned non-JSON` and discard it — which is indistinguishable, in a
+saved trace, from a transport failure, and cost a whole debugging round. It now logs
+the length and the first 140 characters, and runs `tryExtractArticle` over the body
+in case the origin handed back the article as a page (a bot wall is rejected there
+anyway). Any new tier that rejects a body it did fetch should name what it saw.
 
 **Route the proxied GraphQL call through `fetchHtmlViaProxies`, never a bare
 `fetch` loop.** A proxy will forward a compressed body without the matching

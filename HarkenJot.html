@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.60.0';
+    const APP_VERSION = '1.62.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -2581,6 +2581,34 @@
     // Identity key for "is this the same link?" — used by duplicate detection and
     // by the failed-link list, so a retry updates the entry it came from rather
     // than adding a second one that differs only by a trailing slash.
+    // Candidate WordPress REST roots for an article URL, most specific first.
+    //
+    // `<origin>/wp-json/…` is only right for a single-site install. HPCwire is a
+    // subdirectory MULTISITE: the article at
+    // hpcwire.com/aiwire/2026/07/10/<slug>/ belongs to the "aiwire" site, whose
+    // REST API lives at hpcwire.com/aiwire/wp-json/…, and the origin's own API
+    // answers `[]` for that slug — a WordPress install that is genuinely alive
+    // and genuinely does not have this post. That empty array is why the tier
+    // looked like it was working while returning nothing.
+    //
+    // The date block is the divider: in a WP date permalink everything before
+    // /YYYY/MM/DD/ is the site root, so each prefix is a candidate. Returns the
+    // longest prefix first, since the subsite is the more specific answer, with
+    // the bare origin last as the single-site case.
+    const wpRestRoots = (u) => {
+      const segs = u.pathname.split('/').filter(Boolean);
+      const dateAt = segs.findIndex((seg, i) =>
+        /^\d{4}$/.test(seg) && /^\d{2}$/.test(segs[i + 1] || '') && /^\d{2}$/.test(segs[i + 2] || ''));
+      const roots = [];
+      // Cap the walk: a deep path with no date block would otherwise generate a
+      // candidate per segment, and each candidate costs a request.
+      for (let n = Math.min(dateAt > 0 ? dateAt : 0, 3); n >= 1; n--) {
+        roots.push(`${u.origin}/${segs.slice(0, n).join('/')}`);
+      }
+      roots.push(u.origin);
+      return [...new Set(roots)];
+    };
+
     const normalizeUrlKey = (u) => (u || '').trim().toLowerCase().replace(/#.*$/, '').replace(/\/$/, '');
 
     // A failed link's report, shaped for pasting somewhere a person or an agent
@@ -2796,7 +2824,14 @@
     //
     // Resolves with the response body, or null on any failure (blocked frame,
     // CSP, non-2xx, timeout) so callers can fall through to the proxy chain.
-    const fetchViaNullOriginFrame = (targetUrl, init = {}, ms = 10000) =>
+    // Both null-origin routes below run a snippet of script inside a sandboxed
+    // frame and wait for it to post a string back. Everything except that
+    // snippet is shared plumbing: build the frame, honour a timeout, accept
+    // exactly one message carrying our token, and always tear the frame down.
+    //
+    // `body` is JS source. It gets a `send(stringOrNull)` in scope and must call
+    // it exactly once; anything it never sends is resolved as null by the timeout.
+    const runInNullOriginFrame = (body, ms) =>
       new Promise((resolve) => {
         let frame = null;
         let timer = null;
@@ -2828,9 +2863,7 @@
           frame.srcdoc = '<!doctype html><meta charset="utf-8"><script>' +
             '(function(){var t=' + JSON.stringify(token) + ';' +
             'var send=function(b){try{parent.postMessage({hjFrameToken:t,body:b},"*");}catch(e){}};' +
-            'try{fetch(' + JSON.stringify(targetUrl) + ',' + JSON.stringify(init) + ')' +
-            '.then(function(r){return r.ok?r.text():null;})' +
-            '.then(send,function(){send(null);});}catch(e){send(null);}})();' +
+            'try{' + body + '}catch(e){send(null);}})();' +
             '<\/script>';
           timer = setTimeout(() => finish(null), ms);
           document.body.appendChild(frame);
@@ -2839,6 +2872,64 @@
           finish(null);
         }
       });
+
+    // Fetch a URL from inside a sandboxed iframe, so the request carries the
+    // opaque origin "null" instead of this page's origin.
+    //
+    // ForumMagnum (LessWrong / Alignment Forum / EA Forum) answers /graphql with
+    // `Access-Control-Allow-Origin: null` for exactly this shape of caller — its
+    // customizable home page runs user code in a srcdoc frame — while a normal
+    // cross-origin request from this app gets no CORS headers at all. The other
+    // half of the win is the network path: the fetch leaves the reader's own
+    // browser, so the WAF that hands every CORS proxy a challenge page never
+    // sees a datacenter IP.
+    //
+    // Resolves with the response body, or null on any failure (blocked frame,
+    // CSP, non-2xx, timeout) so callers can fall through to the proxy chain.
+    const fetchViaNullOriginFrame = (targetUrl, init = {}, ms = 10000) =>
+      runInNullOriginFrame(
+        'fetch(' + JSON.stringify(targetUrl) + ',' + JSON.stringify(init) + ')' +
+        '.then(function(r){return r.ok?r.text():null;})' +
+        '.then(send,function(){send(null);});',
+        ms
+      );
+
+    // Load a JSONP endpoint from inside the same sandboxed frame and resolve with
+    // the callback argument, re-serialised as JSON.
+    //
+    // This is the one route that is neither a cross-origin `fetch` nor a proxy,
+    // and it beats both of them on a publisher that walls datacenter IPs:
+    //
+    //   - A `<script src>` is not subject to CORS at all, so an origin that sends
+    //     no Access-Control-Allow-Origin (which is what makes the direct fetch
+    //     fail with a bare "Failed to fetch") is still readable this way.
+    //   - The request leaves the reader's own browser — their IP, their real
+    //     user-agent — so the WAF that hands every CORS proxy a challenge page
+    //     never sees it.
+    //
+    // The script it loads is the publisher's, and it runs with script privileges,
+    // so it runs in the SAME opaque-origin sandbox the fetch route uses: no
+    // allow-same-origin means it cannot reach this page's DOM, storage or notes.
+    // Never "simplify" this by appending the script tag to the main document.
+    //
+    // `buildUrl(callbackName)` returns the endpoint with the callback parameter
+    // filled in. Resolves null on a load error, a non-JSONP body (a plain JSON
+    // response parses as a harmless expression and simply never calls back), or
+    // the timeout.
+    const fetchJsonpViaNullOriginFrame = (buildUrl, ms = 8000) => {
+      const cb = 'hjcb' + Math.random().toString(36).slice(2);
+      let src;
+      try { src = buildUrl(cb); } catch (e) { return Promise.resolve(null); }
+      return runInNullOriginFrame(
+        'window[' + JSON.stringify(cb) + ']=function(d){' +
+        'try{send(JSON.stringify(d));}catch(e){send(null);}};' +
+        'var s=document.createElement("script");' +
+        's.src=' + JSON.stringify(src) + ';' +
+        's.onerror=function(){send(null);};' +
+        'document.head.appendChild(s);',
+        ms
+      );
+    };
 
     // Small cross-session memory for network routing: which CORS proxy last worked per host,
     // which custom domains turned out to be Substacks, and show-name → RSS feed mappings.
@@ -2942,15 +3033,17 @@
       // whole page and re-encodes it as JSON, which is measurably slower and the
       // shape that times out first on a slow origin. Worth keeping as a second
       // chance, not worth leading with.
-      { name: 'allorigins/get', url: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, json: true },
-      { name: 'killcors', url: (u) => `https://proxy.killcors.com/?url=${encodeURIComponent(u)}` },
-      // Zibri's public cloudflare-cors-anywhere demo: keyless, and it reads
-      // everything after `?` as the target, so the URL must NOT be encoded here —
-      // percent-escaping it makes the worker fetch the literal escaped string.
-      // Last in the roster on purpose: it is a courtesy demo, so it only ever
-      // carries the traffic the maintained proxies have already lost.
-      { name: 'cors.workers.dev', url: (u) => `https://test.cors.workers.dev/?${u}` }
+      { name: 'allorigins/get', url: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, json: true }
     ];
+
+    // Tried and removed, so they do not get re-proposed: `corsproxy.io` (both
+    // shapes — free tier is localhost-only, 403/401 to everyone else),
+    // `proxy.killcors.com` and `test.cors.workers.dev`. The last two were added
+    // on their documentation and then failed *every* request in the field with a
+    // bare "Failed to fetch" — not a target-specific block, the hosts themselves
+    // were unreachable from a browser. A proxy that never answers is not free:
+    // it holds a slot in the staggered race and pushes the working proxies back.
+    // Do not re-add any of them without a live request proving otherwise.
 
     // Unwrap a proxy response body. Only the enveloping proxies need this; every
     // other one hands back the origin's bytes unchanged.
@@ -6550,28 +6643,131 @@
               // WP post slugs are hyphenated words; skip files and odd paths
               const slug = segments[segments.length - 1];
               if (!/^[a-z0-9-]+$/i.test(slug)) return null;
-              const apiUrl = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+              // Which REST root, and which post type, is the whole problem here.
+              // See wpRestRoots: a subdirectory multisite serves this article from
+              // a subsite's own API, and the origin's API answers `[]` — alive,
+              // and genuinely without this post.
+              const roots = wpRestRoots(u);
+              const postsUrl = (root) =>
+                `${root}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=title,content,link`;
+              // A collection endpoint returns an array, a single-post endpoint an
+              // object; both reach the parsing below, so unwrap by shape.
+              const postIn = (parsed) =>
+                Array.isArray(parsed) ? (parsed[0] || null) : (parsed && parsed.id ? parsed : null);
 
+              // Tier 1: JSONP, from inside the sandboxed frame. First, not last,
+              // because it is the only tier that leaves the reader's own browser
+              // — no CORS to be refused by, no datacenter IP for a WAF to
+              // challenge. WP core has served `?_jsonp=` since the REST API
+              // shipped and `rest_jsonp_enabled` defaults to true, so on a
+              // WordPress publisher this usually just works; on anything else it
+              // never calls back and falls through on its timeout.
+              //
+              // Every candidate root goes at once rather than in sequence: they
+              // are cheap, independent, and trying them serially would cost a
+              // timeout per miss.
               let raw = null;
-              try {
-                const response = await fetchWithTimeout(apiUrl, 5000);
-                if (response.ok) raw = await response.text();
-                else console.log(`[HJ:article] WordPress API direct: http ${response.status}`);
-              } catch (e) {
-                console.log('[HJ:article] WordPress API direct failed:', e?.message || e);
+              let liveRoot = null;
+              const replies = await Promise.all(roots.map(async (root) => ({
+                root,
+                body: await fetchJsonpViaNullOriginFrame((cb) => `${postsUrl(root)}&_jsonp=${cb}`)
+              })));
+              for (const { root, body } of replies) {
+                if (!body) continue;
+                let parsed;
+                try { parsed = JSON.parse(body); } catch (e) { continue; }
+                // An empty array is still proof that a WordPress REST API answers
+                // at this root — worth remembering, because it is where the search
+                // fallback below should look.
+                if (!liveRoot && (Array.isArray(parsed) || parsed?.id)) liveRoot = root;
+                if (postIn(parsed)) {
+                  raw = body;
+                  console.log('[HJ:article] WordPress API via JSONP', { root, slug, chars: raw.length });
+                  break;
+                }
               }
-              // 15s, not the default 8s: this is a WAF'd origin serving a
-              // full article's JSON (100-200KB), and at 8s every proxied attempt
-              // was aborted mid-transfer instead of returning the post.
+              if (!raw && liveRoot) console.log('[HJ:article] WordPress REST is live but has no such post', { liveRoot, slug });
+
+              // Tier 1b: a live API with no matching post usually means the post
+              // is not the `post` type — news sites routinely put syndicated or
+              // sponsored sections in a custom type, which wp/v2/posts never
+              // returns. wp/v2/search spans every public type and hands back the
+              // id and type of whatever actually owns this URL, which turns into
+              // a direct single-post fetch.
+              if (!raw && liveRoot) {
+                const searchUrl = `${liveRoot}/wp-json/wp/v2/search?search=${encodeURIComponent(slug.replace(/-/g, ' '))}` +
+                  `&subtype=any&per_page=20&_fields=id,url,type,subtype`;
+                const found = await fetchJsonpViaNullOriginFrame((cb) => `${searchUrl}&_jsonp=${cb}`);
+                let hit = null;
+                if (found) {
+                  try {
+                    const hits = JSON.parse(found);
+                    // Match on path, not the whole URL: the search result's
+                    // permalink can differ in scheme, www, or trailing slash.
+                    const wantPath = u.pathname.replace(/\/+$/, '');
+                    if (Array.isArray(hits)) {
+                      hit = hits.find((h) => {
+                        try { return new URL(h.url).pathname.replace(/\/+$/, '') === wantPath; }
+                        catch (e) { return false; }
+                      }) || null;
+                    }
+                  } catch (e) { /* not the payload */ }
+                }
+                if (hit && hit.id && hit.subtype) {
+                  console.log('[HJ:article] WordPress search located the post', { id: hit.id, type: hit.subtype });
+                  const byId = `${liveRoot}/wp-json/wp/v2/${encodeURIComponent(hit.subtype)}/${hit.id}?_fields=title,content,link`;
+                  const body = await fetchJsonpViaNullOriginFrame((cb) => `${byId}&_jsonp=${cb}`);
+                  let parsed;
+                  try { parsed = body ? JSON.parse(body) : null; } catch (e) { parsed = null; }
+                  if (postIn(parsed)) {
+                    raw = body;
+                    console.log('[HJ:article] WordPress API via JSONP (custom type)', { type: hit.subtype, chars: raw.length });
+                  } else {
+                    console.log('[HJ:article] WordPress: custom-type fetch returned no post', { type: hit.subtype });
+                  }
+                } else if (found) {
+                  console.log('[HJ:article] WordPress search: nothing matched this URL');
+                }
+              }
+
+              // Tiers 2 and 3 work against whichever root proved live, falling
+              // back to the most specific candidate if none answered at all.
+              const apiUrl = postsUrl(liveRoot || roots[0]);
+
+              // Tier 2: direct. The WP REST API echoes the request Origin in its
+              // CORS headers, so this works wherever the publisher's WAF lets a
+              // browser XHR through.
+              if (!raw) {
+                try {
+                  const response = await fetchWithTimeout(apiUrl, 5000);
+                  if (response.ok) raw = await response.text();
+                  else console.log(`[HJ:article] WordPress API direct: http ${response.status}`);
+                } catch (e) {
+                  console.log('[HJ:article] WordPress API direct failed:', e?.message || e);
+                }
+              }
+              // Tier 3: the proxy chain, at 15s rather than the default 8s —
+              // this is a WAF'd origin serving a full article's JSON
+              // (100-200KB), and at 8s every proxied attempt was aborted
+              // mid-transfer instead of returning the post.
               if (!raw) raw = await fetchHtmlViaProxies(apiUrl, { timeoutMs: 15000 });
               if (!raw) return null;
 
               let posts;
               try { posts = JSON.parse(raw); } catch {
-                console.log('[HJ:article] WordPress API returned non-JSON');
-                return null;
+                // Say what came back. A proxy reports "succeeded" on any body over
+                // 100 chars, so a WAF challenge page served at HTTP 200 lands here
+                // looking exactly like a transport failure — and a bare "returned
+                // non-JSON" gives a later reader of the trace nothing to act on.
+                const head = raw.replace(/\s+/g, ' ').trim().slice(0, 140);
+                console.log(`[HJ:article] WordPress API returned non-JSON (${raw.length} chars): ${head}`);
+                // If the origin handed back a page instead of the API payload, it
+                // may still be the article — tryExtractArticle rejects a bot wall.
+                const salvaged = /<html|<body|<div|<p[ >]/i.test(raw) ? tryExtractArticle(raw) : null;
+                if (salvaged) console.log('[HJ:article] WordPress API: salvaged article from non-JSON body', { chars: salvaged.text.length });
+                return salvaged;
               }
-              const post = Array.isArray(posts) ? posts[0] : null;
+              const post = postIn(posts);
               const bodyHtml = post?.content?.rendered || '';
               if (!bodyHtml || bodyHtml.length < 100) {
                 console.log('[HJ:article] WordPress API: no post content', { slug, posts: Array.isArray(posts) ? posts.length : typeof posts });
@@ -7373,6 +7569,12 @@
           const earlyWaybackP = preloadFallbacks ? fetchWayback().catch(() => null) : null;
           const earlyArchiveP = preloadFallbacks ? tryArchiveToday().catch(() => null) : null;
           const earlyJinaP = preloadFallbacks ? tryJinaReader(url).catch(() => null) : null;
+          // WordPress joins the head start too. Its first tier is JSONP out of the
+          // sandboxed frame — no proxy, no CORS, and the request leaves the
+          // reader's own browser — which makes it the tier least bothered by the
+          // exact wall that got this host flagged in the first place.
+          const earlyWpP = (preloadFallbacks && !wpApiAlreadyFailed)
+            ? tryWordPressApi(url).catch(() => null) : null;
 
           let html = await fetchHtmlViaProxies(url);
 
@@ -7482,7 +7684,7 @@
             // its CORS-enabled API often succeeds where every proxy failed.
             const wpP = wpApiAlreadyFailed
               ? Promise.resolve(null)
-              : tryWordPressApi(url).catch(() => null);
+              : (earlyWpP || tryWordPressApi(url).catch(() => null));
 
             // Strategy 5: archive.today — a browser-rendered snapshot, and the
             // route with the best odds on a publisher that walls every proxy.
