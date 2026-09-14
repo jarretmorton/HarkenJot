@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.62.0';
+    const APP_VERSION = '1.62.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -12922,9 +12922,13 @@
               className={`btn btn-secondary${searchOpen ? ' active' : ''}`}
               onClick={toggleSearch}
               title={searchOpen ? 'Close search' : 'Search library'}
+              aria-label={searchOpen ? 'Close search' : 'Search library'}
               style={searchOpen ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
             >
-              <Icons.Search />
+              {/* An X while open: Copy/Import/Export are hidden then, and an orange
+                  magnifier didn't read as the way back out. Not a magnifier-with-X —
+                  that glyph conventionally means "no results". */}
+              {searchOpen ? <Icons.X /> : <Icons.Search />}
             </button>
             {searchOpen && (
               <input
