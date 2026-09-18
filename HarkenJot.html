@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.62.1';
+    const APP_VERSION = '1.62.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -9335,15 +9335,41 @@
             album: 'Podcast',
             artwork: podcastAudio.artworkUrl || null
           });
-        } else if (videoId && playerRef.current) {
-          // YouTube: Use YouTube player
+        } else if (videoId) {
+          // YouTube: Use YouTube player.
+          //
+          // Gated on `videoId` alone — never on playerRef.current. The IFrame
+          // player is built on a 100 ms timeout (longer still when the API
+          // script hasn't loaded yet), so at the commit that sets videoId the
+          // ref is always null; and assigning a ref doesn't re-render, so
+          // nothing ever re-ran this effect once the player existed. The result
+          // was a YouTube card with no actions and no metadata at all: Chrome
+          // fell back to its own transport over the silent anchor, which is why
+          // the notification showed no skip buttons, and why Android Auto's back
+          // button seeked the 30 s anchor instead of the video — the video just
+          // carried on, which reads as "back skips forward".
+          //
+          // Registering ahead of the player is safe because every handler
+          // resolves playerRef when it runs, not when it is built.
+          const ytSeekTo = (target) => {
+            const pl = playerRef.current;
+            if (!pl?.seekTo) return;
+            const dur = pl.getDuration ? pl.getDuration() : 0;
+            const next = Math.max(0, dur > 0 ? Math.min(dur, target) : target);
+            pl.seekTo(next, true);
+            // The IFrame player has no timeupdate event, and the polling
+            // interval only runs while playing — so push the new position into
+            // state here or a seek made from the car while paused never reaches
+            // setPositionState, and the card's progress bar sits where it was.
+            setCurrentTime(next);
+          };
           const ytSkipBack = (details) => {
             const pl = playerRef.current;
-            if (pl?.seekTo) pl.seekTo(Math.max(0, pl.getCurrentTime() - (details?.seekOffset || 15)), true);
+            if (pl?.getCurrentTime) ytSeekTo(pl.getCurrentTime() - (details?.seekOffset || 15));
           };
           const ytSkipForward = (details) => {
             const pl = playerRef.current;
-            if (pl?.seekTo) pl.seekTo(pl.getCurrentTime() + (details?.seekOffset || 15), true);
+            if (pl?.getCurrentTime) ytSeekTo(pl.getCurrentTime() + (details?.seekOffset || 15));
           };
           MediaSessionManager.setActionHandlers({
             onPlay: () => playerRef.current?.playVideo(),
@@ -9353,12 +9379,11 @@
             onPreviousTrack: ytSkipBack,
             onNextTrack: ytSkipForward,
             onSeekTo: (details) => {
-              const pl = playerRef.current;
-              if (pl?.seekTo && details?.seekTime != null) pl.seekTo(details.seekTime, true);
+              if (details?.seekTime != null) ytSeekTo(details.seekTime);
             },
             onStop: () => {
               const pl = playerRef.current;
-              if (pl?.pauseVideo) { pl.pauseVideo(); if (pl.seekTo) pl.seekTo(0, true); }
+              if (pl?.pauseVideo) { pl.pauseVideo(); ytSeekTo(0); }
             }
           });
 
