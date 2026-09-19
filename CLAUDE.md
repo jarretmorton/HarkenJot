@@ -533,10 +533,20 @@ the link away with it. Extract, then canonicalise, then write the resolved link
 back into the box so the failure record, the saved source and a later retry all
 work from one string.
 
-The reader's manual-paste box learned the other half. What is in the URL field
-when someone lands there is usually the page's *title* — which is a better name
-for the source than "Pasted Content", and must not be stored as its `url`, where
-it would give the source an identity no other copy of the article can match.
+**A label and a body want different things, so the reader splits on length.**
+Standing down from a non-link first opened the manual-paste textarea, which is
+wrong for the case that actually happens: a pasted *title* means the fix is to
+paste the right link, and a textarea unfolding underneath is one more thing to
+dismiss on the way to doing that. Under 400 characters the toast therefore says
+only "paste the page's URL" and nothing opens. Past 400 it is the article itself
+pasted into the wrong field — no headline runs that long — and the box opens with
+the text already moved into it, with the URL field cleared so
+`handleManualSubmit` cannot take the whole body as the source's title.
+
+That field is still where a source gets *named*: with the box open, a title typed
+there beats "Pasted Content", and `handleManualSubmit` keeps it as the title while
+refusing to store it as the `url`, where it would give the source an identity no
+other copy of the article can match.
 
 ### Network Fetch Conventions
 
