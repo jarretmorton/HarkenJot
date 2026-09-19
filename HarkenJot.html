@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.63.0';
+    const APP_VERSION = '1.63.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -6479,8 +6479,22 @@
         const found = extractUrlFromInput(typed);
         if (!found) {
           console.log('[HJ:article] not a link, nothing fetched:', typed.slice(0, 120));
-          showToast("That's not a link — paste the page's URL, or its text below");
-          setShowManualInput(true);
+          // A label and a body want different things here. Under 400 characters
+          // this is a title or a typo — the fix is to paste the right link, and
+          // a textarea opening underneath is one more thing to dismiss on the
+          // way to doing that. Past 400 it is the article itself pasted into the
+          // wrong field (no headline runs that long), and the only useful
+          // response is to move it where it works — which means clearing the URL
+          // box too, or handleManualSubmit would take the whole body as the
+          // source's title.
+          if (typed.length >= 400) {
+            setManualContent(typed);
+            setShowManualInput(true);
+            setUrl('');
+            showToast('That looks like the article itself — check it below and add it');
+          } else {
+            showToast("That's not a link — paste the page's URL");
+          }
           return;
         }
         // Canonicalise here rather than in the callers, so extraction runs on
@@ -7887,12 +7901,12 @@
         if (!manualContent.trim()) return;
 
         // Same canonical form the fetch path saves, so a paste made after a
-        // failed "…#section" fetch still matches that article later. The box is
-        // reached with something that is *not* a link often enough to matter —
-        // the fetch path sends people here when their paste held no URL — and
-        // storing that as the source's `url` would give it an identity no other
-        // copy of the article can match. What it usually is, though, is the
-        // page's title, which is a better name than "Pasted Content".
+        // failed "…#section" fetch still matches that article later.
+        //
+        // The field does not always hold a link, though. With the box open it is
+        // the one place to *name* what you are pasting, and a title typed there
+        // beats "Pasted Content". It must not become the source's `url`: that
+        // would give it an identity no other copy of the article can match.
         const found = extractUrlFromInput(url);
         const canonicalUrl = found ? stripUrlFragment(found) : '';
         const pastedTitle = found ? '' : (url || '').trim();
