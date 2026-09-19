@@ -157,7 +157,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 2475 | `#app-source` script block opens (all JSX below lives here) |
 | 2476 | React hooks imports |
 | 2478–2527 | `Icons` — SVG icon components |
-| 2528–3128 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 2528–3128 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `looksLikeUrl`/`extractUrlFromInput`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
 | 2683–2730 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
 | 3129–3400 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
 | 3217–3225 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
@@ -493,6 +493,51 @@ Two rules the buffer imposes on new logging:
 Spotify and RSS loaders are always reached, so one mark spans however many hops the
 resolution takes and every failure reports against the URL that was actually typed.
 
+### A paste is not always a link
+
+**`new URL()` does not reject a non-URL, so never use it as one.** A page title
+pasted in place of its link — "Harness design for long-running application
+development \ Anthropic", the shape Anthropic's own `<title>` takes — went
+straight into `new URL('https://' + it)`, and **Chromium percent-encoded the
+spaces into the host** rather than failing: hostname
+`harness%20design%20for%20long-running%20application%20development%20`, with the
+backslash read as `/` and the rest as the path. (Node's parser *does* reject it,
+so a quick check off-browser will mislead you here.) Every tier then fetched that
+in earnest. One paste cost ~40 s of proxies, archives and Jina all answering
+nothing, a junk host recorded by `netHints.recordProxyDead` so the *next* article
+from any host paid a head start it hadn't earned, and a permanent entry in
+Unloaded links whose Retry could only ever fail the same way.
+
+`looksLikeUrl` and `extractUrlFromInput` (top level, beside `stripUrlFragment`)
+resolve the input once, before any network work. `fetchArticleFromUrl` and
+`loadMedia` are the two gates; each stands down with a toast naming what to do
+instead, and `recordFailedLink` states the same invariant where the list is
+written, so the panel only ever holds links a later retry could load.
+
+Three rules the helpers follow:
+
+- **A scheme-less host needs a lettered TLD.** The pipeline prefixes `https://`
+  itself and people type bare hosts, so `anthropic.com/x` has to pass — but that
+  is also the only thing separating it from `Anthropic`. Loopback and IP literals
+  are spelled out as their own case, since their last label is numeric.
+- **Inside prose, require `http(s)://` or `www.`.** Guessing bare hosts out of a
+  sentence reads "etc.Then" as a hostname. This is what rescues the common paste —
+  a title with the link on the next line, a share-sheet blurb — instead of
+  rejecting it.
+- **A trailing `)` may belong to the URL.** Wikipedia's `_(disambiguation)` ends
+  in one, so only a closer with no opener to match is trimmed off the end.
+
+Canonicalisation moved *inside* `fetchArticleFromUrl` for the same reason: run
+`stripUrlFragment` on the whole paste first and a `#` earlier in the text takes
+the link away with it. Extract, then canonicalise, then write the resolved link
+back into the box so the failure record, the saved source and a later retry all
+work from one string.
+
+The reader's manual-paste box learned the other half. What is in the URL field
+when someone lands there is usually the page's *title* — which is a better name
+for the source than "Pasted Content", and must not be stored as its `url`, where
+it would give the source an identity no other copy of the article can match.
+
 ### Network Fetch Conventions
 
 **There is one proxy roster: `CORS_PROXIES`.** It used to be copy-pasted into six
@@ -632,10 +677,12 @@ ever receives the fragment, but it travels into every route that treats the URL
 as *data*: `archive.org/wayback/available` and archive.today both index
 fragment-free URLs and report **no snapshot** for one carrying `#motivation`, so
 two fallback tiers were lost before they started, and the saved source never
-matched the same article linked without it. `stripUrlFragment` canonicalises once
-up front and `fetchContent` hands the result to `fetchArticleFromUrl`, so every
-tier — and the saved source — works from one string. The reader renders extracted
-plain text with no anchors to jump to, so nothing wants the fragment back.
+matched the same article linked without it. `fetchArticleFromUrl` resolves the
+input to a link and then `stripUrlFragment`s it once up front — in that order, or
+a `#` earlier in a paste takes the link with it (see **A paste is not always a
+link**) — so every tier, and the saved source, works from one string. The reader
+renders extracted plain text with no anchors to jump to, so nothing wants the
+fragment back.
 
 Rendered-markdown wrappers (`.prose` from Tailwind Typography, `.post-body`,
 `.markdown-body`, `[itemprop="articleBody"]`) sit in the content-selector list
@@ -864,6 +911,7 @@ routine.
 - **Gemini Notebook linking**: `NotebookLMModal` (line 4875); URL validation via `NOTEBOOK_URL_RE` (line 3034)
 - **Library/export, Unloaded links panel**: `LibraryView` (line 12407)
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
+- **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2581) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
 - **Notes panel**: `NoteSidebar` (line 12889)
 - **App-level state/routing**: `App` (line 4104)
 

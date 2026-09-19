@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.62.2';
+    const APP_VERSION = '1.63.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -2576,6 +2576,62 @@
       // A leading "#" is not a URL with a fragment; leave it for the caller's
       // own validation to reject rather than handing back an empty string.
       return hash > 0 ? trimmed.slice(0, hash) : trimmed;
+    };
+
+    // What lands in the URL box is not always a URL. The box takes a paste, and
+    // a paste routinely carries the page's *title* instead of its link — a share
+    // sheet, a copied tab name, a line of notes.
+    //
+    // Nothing downstream noticed, because a title does not fail to parse as a
+    // URL. "Harness design for long-running application development \ Anthropic"
+    // went into `new URL('https://' + it)` and **Chromium percent-encoded the
+    // spaces into the host** rather than rejecting them, handing back the
+    // hostname "harness%20design%20for%20long-running%20application%20…" (the
+    // backslash reads as "/", so the rest became the path). Every tier then
+    // fetched it in earnest. One paste cost ~40 s of proxies, archives and Jina
+    // all answering nothing, a junk host recorded in netHints as proxy-dead so
+    // the *next* article paid for it too, and a permanent entry in Unloaded
+    // links whose Retry can only ever fail the same way. Do not assume a `try {
+    // new URL(x) }` anywhere in this file rejects a non-URL; it does not.
+    //
+    // So resolve the input to a link before any network work, and let the caller
+    // say something useful when there isn't one.
+
+    // Is this string, on its own, something a fetch could resolve? Deliberately
+    // permissive about scheme — the pipeline prefixes "https://" itself, and
+    // people type bare hosts — but the scheme-less form has to read as a dotted
+    // host with a lettered TLD, which is what separates "anthropic.com/x" from
+    // "Anthropic" and from a page title. Loopback and IP literals are spelled
+    // out because their last label is numeric and would fail that test.
+    const looksLikeUrl = (s) => {
+      const t = (s || '').trim();
+      if (!t || /\s/.test(t)) return false;
+      if (/^https?:\/\//i.test(t)) return true;
+      if (/^(?:localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:[/?#]|$)/i.test(t)) return true;
+      return /^[^\s/?#@\\]+\.[a-z]{2,}(?:[:/?#]|$)/i.test(t);
+    };
+
+    // The link inside a paste that carried more than a link ("Title — https://…",
+    // a share-sheet blurb, a quoted line). A scheme or a "www." is required here:
+    // guessing bare hosts out of prose reads "etc.Then" as a hostname.
+    const URL_IN_TEXT_RE = /(?:https?:\/\/|www\.)[^\s<>"'`\\]+/i;
+
+    // Returns a link, or null when the input holds none. Whatever comes back
+    // satisfies looksLikeUrl, so callers can treat a non-null result as a URL.
+    const extractUrlFromInput = (raw) => {
+      const t = (raw || '').trim();
+      if (!t) return null;
+      if (looksLikeUrl(t)) return t;
+      const m = t.match(URL_IN_TEXT_RE);
+      if (!m) return null;
+      let found = m[0].replace(/[.,;:!?'"»]+$/, '');
+      // A URL can genuinely end in ")" — Wikipedia's "_(disambiguation)" — so
+      // only drop a closer that has no opener to match it.
+      while (/[)\]}]$/.test(found) &&
+             (found.match(/[)\]}]/g) || []).length > (found.match(/[([{]/g) || []).length) {
+        found = found.slice(0, -1);
+      }
+      return looksLikeUrl(found) ? found : null;
     };
 
     // Identity key for "is this the same link?" — used by duplicate detection and
@@ -4480,6 +4536,12 @@
       const recordFailedLink = useCallback(({ url, view, stage, reason, detail, trace }) => {
         const canonical = stripUrlFragment(url || '');
         if (!canonical) return;
+        // Every entry in this list is a link a later retry could load — the free
+        // routes that failed come and go. Something that was never a link cannot
+        // come good, so it does not belong here taking up a slot behind a Retry
+        // that can only fail the same way. The loaders reject those up front now;
+        // this is the invariant stated where the list is written.
+        if (!looksLikeUrl(canonical)) return;
         const key = normalizeUrlKey(canonical);
         setFailedLinks(prev => {
           const existing = prev.find(f => normalizeUrlKey(f.url) === key);
@@ -6402,12 +6464,35 @@
         input.click();
       };
 
-      // Takes the URL as a parameter so the whole walk below — the duplicate
-      // check, the proxy chain, every fallback tier and the saved source — works
-      // from the one canonical string that fetchContent normalises, rather than
-      // each tier re-reading the raw input field.
-      const fetchArticleFromUrl = async (url) => {
-        if (!url.trim()) return;
+      // Takes the raw input as a parameter and resolves it once, so the whole
+      // walk below — the duplicate check, the proxy chain, every fallback tier
+      // and the saved source — works from one canonical string rather than each
+      // tier re-reading the input field.
+      const fetchArticleFromUrl = async (rawInput) => {
+        const typed = (rawInput || '').trim();
+        if (!typed) return;
+
+        // A paste is not always a link — see extractUrlFromInput. Resolve it to
+        // one before any network work, so a page title pasted in place of its
+        // URL costs a sentence rather than every tier's timeout, and never
+        // reaches the Unloaded links panel where its Retry could only fail again.
+        const found = extractUrlFromInput(typed);
+        if (!found) {
+          console.log('[HJ:article] not a link, nothing fetched:', typed.slice(0, 120));
+          showToast("That's not a link — paste the page's URL, or its text below");
+          setShowManualInput(true);
+          return;
+        }
+        // Canonicalise here rather than in the callers, so extraction runs on
+        // the whole paste first: a "#" earlier in the text is not this URL's
+        // fragment, and cutting at it would take the link away with it.
+        const url = stripUrlFragment(found);
+        // Whatever the box held, it now holds just the link — so the failure
+        // record, the saved source and a later retry all work from one string.
+        if (url !== typed) {
+          console.log('[HJ:article] loading the link found in the input:', url);
+          setUrl(url);
+        }
 
         // Bail out before any network work if this URL is already saved.
         if (!await checkDuplicateBeforeLoad({ url })) {
@@ -7784,7 +7869,7 @@
         setLoading(false);
       };
 
-      const fetchContent = () => fetchArticleFromUrl(stripUrlFragment(url));
+      const fetchContent = () => fetchArticleFromUrl(url);
 
       // Retrying a saved failure from the library. The URL goes back in the input
       // and straight down the normal path — nothing about the walk differs from a
@@ -7795,15 +7880,22 @@
         setUrl(retryLink.url);
         setShowManualInput(false);
         onRetryConsumed();
-        fetchArticleFromUrl(stripUrlFragment(retryLink.url));
+        fetchArticleFromUrl(retryLink.url);
       }, [retryLink]);
 
       const handleManualSubmit = async () => {
         if (!manualContent.trim()) return;
 
         // Same canonical form the fetch path saves, so a paste made after a
-        // failed "…#section" fetch still matches that article later.
-        const canonicalUrl = stripUrlFragment(url);
+        // failed "…#section" fetch still matches that article later. The box is
+        // reached with something that is *not* a link often enough to matter —
+        // the fetch path sends people here when their paste held no URL — and
+        // storing that as the source's `url` would give it an identity no other
+        // copy of the article can match. What it usually is, though, is the
+        // page's title, which is a better name than "Pasted Content".
+        const found = extractUrlFromInput(url);
+        const canonicalUrl = found ? stripUrlFragment(found) : '';
+        const pastedTitle = found ? '' : (url || '').trim();
 
         // Only check when a URL is supplied — bare pasted text has no reliable
         // identity key, so we let it through.
@@ -7819,7 +7911,7 @@
 
         addSource({
           type: 'article',
-          title: canonicalUrl || 'Pasted Content',
+          title: canonicalUrl || pastedTitle || 'Pasted Content',
           url: canonicalUrl || null,
           content: manualContent
         });
@@ -11036,6 +11128,26 @@
       };
 
       const loadMedia = async () => {
+        // A paste is not always a link — see extractUrlFromInput. Everything
+        // below reads the URL off component state, so resolve the input first
+        // and let the state land before loading anything.
+        const typed = (url || '').trim();
+        const found = extractUrlFromInput(typed);
+        if (!found) {
+          console.log('[HJ:media] not a link, nothing loaded:', typed.slice(0, 120));
+          showToast("That's not a link — paste a YouTube, Spotify, Substack or RSS URL");
+          return;
+        }
+        // The paste carried more than the link (a title, a blurb) or some stray
+        // whitespace: put the link on its own in the box and re-enter through
+        // the latch below, once that state has landed.
+        if (found !== url) {
+          console.log('[HJ:media] loading the link found in the input:', found);
+          setUrl(found);
+          setRetryArmed(true);
+          return;
+        }
+
         beginLoadTrace(url);
         const urlType = detectUrlType(url);
 
@@ -11211,6 +11323,8 @@
       // Retrying a saved failure from the library. loadMedia reads the URL off
       // component state rather than taking it as an argument, so the URL is set
       // first and the load fires on the next render, once that state has landed.
+      // loadMedia uses the same latch when it has to rewrite the box itself —
+      // a paste that carried a title alongside the link.
       const [retryArmed, setRetryArmed] = useState(false);
       useEffect(() => {
         if (!retryLink) return;
