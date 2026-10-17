@@ -355,6 +355,15 @@ loads on demand from `cdn.jsdelivr.net`.
 - IndexedDB (primary persistence), localStorage (fallback); `navigator.storage.persist()` to request non-evictable storage
 - Media Session API (hardware media controls)
 - Screen Wake Lock API (prevent sleep during playback)
+
+  Both views get it from the shared `useScreenWakeLock()` hook — never call
+  `navigator.wakeLock` directly. The browser silently drops the lock whenever the page
+  is hidden (screen off, app switch, lock screen) and does not restore it, so the hook
+  tracks *wanting* the lock separately from holding one and re-requests on
+  `visibilitychange`. It also releases on unmount (both views remount on every source
+  switch) and drops a lock granted after playback already stopped. The old per-view
+  helpers lacked all three, which is why the screen sometimes timed out mid-playback
+  and sometimes stayed on after it.
 - Clipboard API (copy notes)
 - FileReader (PDF, local audio, and library JSON import)
 - Fetch API with CORS proxy fallbacks

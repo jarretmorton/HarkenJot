@@ -2546,7 +2546,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.63.1';
+    const APP_VERSION = '1.63.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4100,6 +4100,81 @@
       }
     };
 
+    // Screen Wake Lock — keeps the screen on while something is playing.
+    //
+    // The browser drops a wake lock on its own whenever the page is hidden
+    // (screen off, app switch, the lock screen) and never hands it back, so the
+    // lock has to be re-requested when the page is visible again. That is why
+    // the *intent* (wantedRef) is tracked separately from the sentinel: callers
+    // say what they want, and the hook reconciles. It also guards the two races
+    // the old per-view helpers lost — a lock granted after playback already
+    // stopped, and an old sentinel's 'release' event clearing the ref of the
+    // new one — both of which orphaned a lock nothing would ever release.
+    function useScreenWakeLock() {
+      const wantedRef = useRef(false);
+      const sentinelRef = useRef(null);
+      const pendingRef = useRef(false);
+
+      const ensure = useCallback(async () => {
+        if (!('wakeLock' in navigator)) return;
+        if (!wantedRef.current || sentinelRef.current || pendingRef.current) return;
+        // Requesting while hidden is refused; the visibility handler retries.
+        if (document.visibilityState !== 'visible') return;
+        pendingRef.current = true;
+        let sentinel = null;
+        try {
+          sentinel = await navigator.wakeLock.request('screen');
+        } catch (err) {
+          console.log('Wake Lock request failed:', err);
+        } finally {
+          pendingRef.current = false;
+        }
+        if (!sentinel) return;
+        if (!wantedRef.current) {
+          // Playback stopped while the request was in flight.
+          sentinel.release().catch(() => {});
+          return;
+        }
+        sentinel.addEventListener('release', () => {
+          if (sentinelRef.current === sentinel) sentinelRef.current = null;
+          console.log('Wake Lock was released');
+        });
+        sentinelRef.current = sentinel;
+        console.log('Wake Lock activated');
+      }, []);
+
+      const acquire = useCallback(() => {
+        wantedRef.current = true;
+        ensure();
+      }, [ensure]);
+
+      const release = useCallback(() => {
+        wantedRef.current = false;
+        const sentinel = sentinelRef.current;
+        sentinelRef.current = null;
+        if (sentinel) {
+          sentinel.release()
+            .then(() => console.log('Wake Lock released'))
+            .catch(err => console.log('Wake Lock release failed:', err));
+        }
+      }, []);
+
+      useEffect(() => {
+        const onVisibility = () => {
+          if (document.visibilityState === 'visible') ensure();
+        };
+        document.addEventListener('visibilitychange', onVisibility);
+        return () => {
+          document.removeEventListener('visibilitychange', onVisibility);
+          // Both views are keyed on the source, so this runs on every source
+          // switch — without it the old view's lock outlived the view.
+          release();
+        };
+      }, [ensure, release]);
+
+      return { acquire, release };
+    }
+
     // Media Session API utility for Android Auto / lock screen controls
     const MediaSessionManager = {
       // Silent audio element for TTS media session activation
@@ -5629,7 +5704,8 @@
       const speakFromIndexRef = useRef(null);
       const lastBackPressRef = useRef(0);
       const wasCancelledRef = useRef(false);
-      const wakeLockRef = useRef(null);
+      // Keep the screen on while playing (see useScreenWakeLock)
+      const { acquire: requestWakeLock, release: releaseWakeLock } = useScreenWakeLock();
       const sentenceRefs = useRef({});
       const readerContainerRef = useRef(null);
       const isManualScrollingRef = useRef(false);
@@ -7935,47 +8011,6 @@
         setManualContent('');
       };
 
-      // Wake Lock helpers to keep screen on during playback
-      const requestWakeLock = async () => {
-        try {
-          if ('wakeLock' in navigator) {
-            // Release old wake lock if it exists
-            if (wakeLockRef.current) {
-              try {
-                await wakeLockRef.current.release();
-              } catch (e) {
-                // Ignore errors from releasing
-              }
-            }
-
-            // Always request fresh wake lock (handles screen on/off cycles)
-            wakeLockRef.current = await navigator.wakeLock.request('screen');
-            console.log('Wake Lock activated');
-
-            // Listen for release event to clear the ref
-            wakeLockRef.current.addEventListener('release', () => {
-              console.log('Wake Lock was released');
-              wakeLockRef.current = null;
-            });
-          }
-        } catch (err) {
-          console.log('Wake Lock not supported or failed:', err);
-          wakeLockRef.current = null;
-        }
-      };
-
-      const releaseWakeLock = async () => {
-        try {
-          if (wakeLockRef.current) {
-            await wakeLockRef.current.release();
-            wakeLockRef.current = null;
-            console.log('Wake Lock released');
-          }
-        } catch (err) {
-          console.log('Wake Lock release failed:', err);
-        }
-      };
-
       const togglePlayback = () => {
         if (isPlaying) {
           wasCancelledRef.current = true;
@@ -9167,7 +9202,8 @@
           }
         }
       }));
-      const wakeLockRef = useRef(null);
+      // Keep the screen on while playing (see useScreenWakeLock)
+      const { acquire: requestWakeLock, release: releaseWakeLock } = useScreenWakeLock();
       const audioContextRef = useRef(null);
       const analyzerRef = useRef(null);
       const silenceTimeoutRef = useRef(null);
@@ -11392,47 +11428,6 @@
         if (wasPlayingRef.current) {
           if (audioPlayerRef.current) audioPlayerRef.current.play();
           if (playerRef.current) playerRef.current.playVideo();
-        }
-      };
-
-      // Wake Lock helpers to keep screen on during playback
-      const requestWakeLock = async () => {
-        try {
-          if ('wakeLock' in navigator) {
-            // Release old wake lock if it exists
-            if (wakeLockRef.current) {
-              try {
-                await wakeLockRef.current.release();
-              } catch (e) {
-                // Ignore errors from releasing
-              }
-            }
-
-            // Always request fresh wake lock (handles screen on/off cycles)
-            wakeLockRef.current = await navigator.wakeLock.request('screen');
-            console.log('Wake Lock activated');
-
-            // Listen for release event to clear the ref
-            wakeLockRef.current.addEventListener('release', () => {
-              console.log('Wake Lock was released');
-              wakeLockRef.current = null;
-            });
-          }
-        } catch (err) {
-          console.log('Wake Lock not supported or failed:', err);
-          wakeLockRef.current = null;
-        }
-      };
-
-      const releaseWakeLock = async () => {
-        try {
-          if (wakeLockRef.current) {
-            await wakeLockRef.current.release();
-            wakeLockRef.current = null;
-            console.log('Wake Lock released');
-          }
-        } catch (err) {
-          console.log('Wake Lock release failed:', err);
         }
       };
 
