@@ -18,6 +18,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Unloaded Links** — A link that fails to load is kept instead of lost. The library lists it with where the load gave up and a copyable report of the attempt, plus one-tap retry — worth trying, since most of these failures are free proxies and archives being temporarily unavailable rather than anything permanent
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
+- **Optional GitHub Sync** — Keep the library in a private GitHub repo shared by your phone and desktop. Notes merge by note, deletes stick, edits made offline go up when you're back online, and agents can read the repo and add sources to it. Off unless you turn it on
 - **Single-File Deployment** — The entire application is one HTML file (plus optional home-screen icons)
 - **Add to Home Screen** — Installs to your phone's home screen with a proper app icon
 
@@ -58,6 +59,8 @@ HarkenJot has three main views:
 | **Media** | Play YouTube videos, podcasts (via RSS/audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
 
+The **gear** in the header opens **Settings**: a one-tap library backup, and GitHub sync.
+
 ## Tech Stack
 
 - **React 18 + ReactDOM 18** — UI components and rendering (loaded via CDN)
@@ -95,9 +98,34 @@ HTTPS is recommended for full browser API support (microphone access, Media Sess
 The app opens in a normal browser tab. Launching without browser chrome would
 need a web app manifest, which isn't included yet.
 
+## GitHub sync (optional)
+
+Sync keeps the library in a **private** GitHub repository, so every device you use sees the same sources, notes and reading state. The browser's own storage stays the primary copy: the app works offline as before, and changes made offline go up the next time it syncs.
+
+To set it up:
+
+1. **Create a private repository** for the library, for example `harkenjot-library`. Check that it says *Private*: the library holds every note you take.
+2. **Create a fine-grained personal access token** (GitHub → Settings → Developer settings). Give it access to that one repository only, with **Contents: Read and write**, and an expiry date.
+3. **On the device with your most complete library:**
+   1. Open **Settings** (the gear) and enter the repository and the token. A backup downloads first.
+   2. Press **Initialise repo from this library**.
+   3. Set the mode to **Sync**.
+4. **On every other device:** enter the same repository with its own token, then choose **Pull-only** to take the library in without sending anything back. Switch to **Sync** once you're happy.
+
+Once it is on, sync runs:
+
+- when the app opens;
+- when the connection comes back;
+- a minute after you stop editing;
+- when the app goes to the background.
+
+Notes merge note by note, and status, speed and position merge field by field, so edits on two devices never ask which copy to keep. A sync that would delete many sources at once waits for you to confirm or undo. Set the mode back to **Off** at any time: the app carries on from its own copy, and the repository keeps its full history.
+
+The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder.
+
 ## Data & Privacy
 
-All notes and sources are stored locally in the browser (IndexedDB, falling back to `localStorage`). No data is sent to any server. You can export your full library as a JSON file for backup or transfer between browsers.
+All notes and sources are stored locally in the browser (IndexedDB, falling back to `localStorage`). With GitHub sync off, no library data is sent to any server. With it on, the library is also stored in the private GitHub repository you chose. The access token stays in that browser's local storage, and is never exported, synced or logged. You can export your full library as a JSON file for backup or transfer between browsers.
 
 ## License
 

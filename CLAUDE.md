@@ -522,9 +522,13 @@ resolution takes and every failure reports against the URL that was actually typ
 ### GitHub sync
 
 Optional sync of the library through a **private** GitHub repo, so phone and desktop share one
-library and agents can read and extend it. It is being built in phases on a beta deployment
-(Netlify, a different origin from GitHub Pages, so its IndexedDB is separate from the real
-library).
+library and agents can read and extend it. It is Off by default and does nothing until a repo is
+set up in Settings.
+
+It was built in phases on a beta deployment: Netlify, deploying the feature branch, a different
+origin from GitHub Pages and so with IndexedDB separate from the real library. It shipped to
+production in Phase 5 (v1.68.2). Keep using a separate-origin beta for future sync changes. A
+second GitHub Pages site under the same `*.github.io` host would share the real library's storage.
 
 - **Phase 1 (v1.64.0)** shipped the Settings page, the file formats and merge rules, and the local
   change recorder.
