@@ -549,7 +549,7 @@ or save.
 
 ```
 harkenjot.json               {"app":"HarkenJot","schemaVersion":1}
-INDEX.md                     generated table of every source (title → folder, status, type, added); never read back
+INDEX.md                     generated table of every source (title → folder, status, notes, type, added); never read back
 failed-links.json            {"schema":1,"links":{<normalizeUrlKey>: entry | {"removed":true,"removedAt"}}}
 sources/<id>/meta.json       the source at creation, minus content/sentences/status/isRead; written once
 sources/<id>/text.txt        the source's content (article/pdf/text only); written once
@@ -681,10 +681,16 @@ failed or offline pull, instead of waiting out the five minutes.
 logged; a repeat of the latest line updates that entry's time and count instead of adding a new one.
 
 **`INDEX.md` lets a person find a source without its id.** It is a table of every live source, newest
-first, each title linking to its folder. Initialise writes it, and **Write index** in Settings
-rewrites it through the contents API with the file's `sha`, which needs a read-and-write token.
-Phase 4's push will keep it current. It is built from the writing device's library and never read
-back.
+first: each title links to its folder, followed by status, note count, type and date added.
+
+- **Writing it:** Initialise writes it, and **Write index** in Settings rewrites it through the
+  contents API with the file's `sha`, which needs a read-and-write token. Phase 4's push is to rewrite
+  it automatically, at which point the button goes.
+- **Reading it:** Settings always links to it (`HJSync.indexUrl()`).
+- **Scope:** it is built from the writing device's library and never read back.
+
+**A button's result in Settings is replaced by the live status once a later pull reports.** Without
+this, a failed Pull now left its red box up after an automatic retry had already succeeded.
 
 **Positions are stamped by sync, not as they change,** because they are written every second. Any
 position that differs from `sync_meta.positions` (the value last synced) is stamped "now" when a sync

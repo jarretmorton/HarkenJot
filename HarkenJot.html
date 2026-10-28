@@ -2464,6 +2464,11 @@
       margin-right: 0.35rem;
     }
 
+    .settings-meta a {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
     .settings-meta code {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.75rem;
@@ -2778,7 +2783,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.67.0';
+    const APP_VERSION = '1.67.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4355,12 +4360,14 @@
       // folder, so a person on github.com (or an agent) can find a source
       // without knowing its id. Built from this device's library; the app
       // never reads it back.
-      indexMarkdown(sources) {
+      indexMarkdown(sources, notes = []) {
+        const noteCount = {};
+        notes.forEach(n => { noteCount[n.sourceId] = (noteCount[n.sourceId] || 0) + 1; });
         const cell = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim();
         const label = { unread: 'not started', inProgress: 'in progress', read: 'complete' };
         const rows = sources.slice()
           .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
-          .map(s => `| [${cell(s.title || s.url || s.id).replace(/[[\]]/g, '\\$&')}](sources/${encodeURIComponent(s.id)}/) | ${label[getReadStatus(s)]} | ${cell(s.type)} | ${String(s.createdAt || '').slice(0, 10)} |`);
+          .map(s => `| [${cell(s.title || s.url || s.id).replace(/[[\]]/g, '\\$&')}](sources/${encodeURIComponent(s.id)}/) | ${label[getReadStatus(s)]} | ${noteCount[s.id] || 0} | ${cell(s.type)} | ${String(s.createdAt || '').slice(0, 10)} |`);
         return [
           '# Library index',
           '',
@@ -4368,14 +4375,19 @@
           '',
           `Written by HarkenJot on ${(this.getConfig() || {}).device || 'a device'}, ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC. Generated — edits here are overwritten.`,
           '',
-          '| Title | Status | Type | Added |',
-          '|---|---|---|---|',
+          '| Title | Status | Notes | Type | Added |',
+          '|---|---|--:|---|---|',
         ].concat(rows).join('\n') + '\n';
+      },
+
+      indexUrl() {
+        const c = this.getConfig();
+        return c ? `https://github.com/${c.owner}/${c.repo}/blob/${encodeURIComponent(c.branch || 'main')}/INDEX.md` : null;
       },
 
       // Rewrite INDEX.md on its own, through the contents API with the file's
       // sha, so it can't overwrite a newer copy.
-      async writeIndex(sources) {
+      async writeIndex(sources, notes) {
         if (!this.isConfigured()) throw this._fail('Save a repo first.');
         const cfg = this.getConfig();
         const branch = cfg.branch || 'main';
@@ -4392,7 +4404,7 @@
           what: 'write to the repo',
           body: {
             message: `Update library index from ${cfg.device || 'device'}`,
-            content: btoa(unescape(encodeURIComponent(this.indexMarkdown(sources)))),
+            content: btoa(unescape(encodeURIComponent(this.indexMarkdown(sources, notes)))),
             branch,
             ...(sha ? { sha } : {}),
           },
@@ -4436,7 +4448,7 @@
         onProgress('Preparing files…');
         const files = HJSyncCore.libraryToFiles(library, this._clock());
         files['README.md'] = LIBRARY_REPO_README;
-        files['INDEX.md'] = this.indexMarkdown(library.sources);
+        files['INDEX.md'] = this.indexMarkdown(library.sources, library.notes);
         const names = Object.keys(files).sort();
         const shas = {};
         for (const p of names) shas[p] = await HJSyncCore.gitBlobSha(files[p]);
@@ -14586,9 +14598,10 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         setResult(null);
         setBusy({ label });
         try {
-          setResult(await fn((text) => setBusy({ label: text })));
+          const r = await fn((text) => setBusy({ label: text }));
+          setResult(r && { ...r, at: Date.now() });
         } catch (e) {
-          setResult({ ok: false, message: e.userMessage || 'Something went wrong talking to GitHub.' });
+          setResult({ ok: false, message: e.userMessage || 'Something went wrong talking to GitHub.', at: Date.now() });
           if (!e.userMessage) console.error('GitHub sync action failed:', e);
         } finally {
           setBusy(null);
@@ -14631,13 +14644,19 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const handlePull = () => runGitHub('Pulling…', async () => {
         const r = await runSync();
         if (!r) return null;
-        if (r.error) return { ok: false, message: r.error };
-        if (r.offline) return { ok: false, message: 'Offline — pull again when the connection is back.' };
-        return { ok: true, message: r.join ? `${r.message} ${r.join.message}` : r.message, join: r.join };
+        if (r.error) return { ok: false, message: r.error, fromPull: true };
+        if (r.offline) return { ok: false, message: 'Offline — pull again when the connection is back.', fromPull: true };
+        return { ok: true, message: r.join ? `${r.message} ${r.join.message}` : r.message, join: r.join, fromPull: true };
       });
 
+      // A pull's result stands only until a later pull (an automatic retry,
+      // say) reports; then the live status below takes its place.
+      useEffect(() => {
+        if (result && result.fromPull && syncStatus.state !== 'syncing' && syncStatus.at > result.at + 500) setResult(null);
+      }, [syncStatus]);
+
       const handleIndex = () => runGitHub('Writing the index…', async () => {
-        const r = await HJSync.writeIndex(sources);
+        const r = await HJSync.writeIndex(sources, notes);
         return { ok: true, message: `Wrote INDEX.md listing ${r.sources} source${r.sources !== 1 ? 's' : ''}.`, link: r.url, linkLabel: 'View INDEX.md' };
       });
 
@@ -14794,6 +14813,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               <h2>Repository</h2>
               <p className="settings-help">
                 Check connection only reads. Write index lists every source in the repo's INDEX.md with a link to its folder (it needs a read-and-write token). Initialise is the one-time move of a library into the repo — run it once, from the device whose library is most complete, into a repo that has never held one. Every other device joins with Pull-only.
+              </p>
+              <p className="settings-meta">
+                <a href={HJSync.indexUrl()} target="_blank" rel="noopener noreferrer">View INDEX.md</a> — every source with its status, note count and a link to its folder.
               </p>
               <div className="settings-actions">
                 {mode === 'pull' && <button className="btn btn-primary" onClick={handlePull} disabled={!!busy || !hasToken}>Pull now</button>}
