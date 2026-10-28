@@ -539,6 +539,8 @@ library).
   - skipped files weren't named.
 
   It also added `INDEX.md`.
+- **Phase 4 (v1.68.0)** added two-way **Sync**: a pull, then a push of what is still waiting.
+  `INDEX.md` now rides along with every push, and the manual Write index button is gone.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -683,11 +685,44 @@ logged; a repeat of the latest line updates that entry's time and count instead 
 **`INDEX.md` lets a person find a source without its id.** It is a table of every live source, newest
 first: each title links to its folder, followed by status, note count, type and date added.
 
-- **Writing it:** Initialise writes it, and **Write index** in Settings rewrites it through the
-  contents API with the file's `sha`, which needs a read-and-write token. Phase 4's push is to rewrite
-  it automatically, at which point the button goes.
+- **Writing it:** Initialise writes it, and every push includes it whenever its blob SHA differs from
+  the repo's, so a pull that brought in an agent's new source is enough to refresh it.
+- **It carries no timestamp or device name,** so two devices with the same library write the same
+  bytes and never take turns rewriting it.
 - **Reading it:** Settings always links to it (`HJSync.indexUrl()`).
 - **Scope:** it is built from the writing device's library and never read back.
+
+**Sync = pull, then push (`_push`).** The push works through these steps:
+
+1. **Merge each file onto the repo's copy.** Each pending file is read from the repo again and merged
+   onto it (through `_rebase` and `mergeFile`), never sent as this device's serialization alone. A
+   device's copy can be missing things only the repo holds: an agent's own `state.json` fields that
+   no clock stamp reproduces, or the rest of a deleted source's state (a local tombstone serializes as
+   `deleted` alone). Sending it as is would erase them.
+2. **Skip what isn't new.** A file whose merge equals the repo's canonical copy is not sent. A source
+   created and deleted here before it ever reached the repo sends nothing.
+3. **Write one commit** through `_commitFiles`, the same chunked writer Initialise uses, with
+   `force: false`.
+4. **Retry if the branch moved.** GitHub answers 422; the whole round (pull, merge, push) runs again
+   on top of the newer commit, up to three times. The log records "the repo moved during the sync".
+5. **Record what was sent.** `sync_meta` gets the pushed blob SHAs, `pending: []`, and `lastPullAt`
+   set to now, so this device's earlier stamps count as the repo's from then on (see `_rebase`).
+
+**A push that deletes a lot waits for a yes:** more than 10 sources, or more than 20 notes and 20% of
+them, newly deleted relative to the repo. Nothing is sent. The status becomes `confirm` (red dot), and
+Settings offers **Send the deletions**, which re-runs the sync with `confirmDeletes`. The pull half
+still runs meanwhile.
+
+**When Sync runs.** It runs on every pull trigger, plus:
+
+- **A minute after the last edit.** `HJSync.record*` return true for any real change, App debounces a
+  sync 60 s out, and a burst of notes becomes one commit.
+- **When the app goes to the background with unsent changes** (`hasUnsent()`), because a phone may kill
+  the tab without another event.
+
+**A token close to expiry** brings a toast on open, from two weeks out. That needs the browser to be
+allowed to read the expiry header. A revoked or expired token turns the dot red; the app keeps working
+locally and loses nothing, and the next sync after a new token is pasted sends what waited.
 
 **A button's result in Settings is replaced by the live status once a later pull reports.** Without
 this, a failed Pull now left its red box up after an automatic retry had already succeeded.
@@ -746,6 +781,20 @@ in-memory mock. The mock uses real git blob SHAs, flat trees, `base_tree` chaini
 ref updates. That covers the paths a real repo would otherwise be needed for: an empty repo, a public
 repo, the app's own repo, a second Initialise, a branch moving mid-upload, a revoked token and a
 missing repo.
+
+The Phase 4 suite drives the real UI on two devices, both in Sync with read-and-write tokens. It
+covers the plan's acceptance tests T1–T12 and T14:
+
+- **Notes:** offline edits on both devices, the same note edited twice, a delete reaching a device that
+  was offline, three notes made offline surviving a restart.
+- **Sources:** delete with and without Undo, speed and status changed on different devices, `copiedAt`
+  kept, `ai-notes.jsonl` untouched.
+- **Concurrency and failure:** both devices syncing at once, a revoked token, a 12-source delete
+  waiting for confirmation.
+- **Triggers:** the one-minute debounce, the sync on going to the background.
+
+**Pass** means both devices end identical, `INDEX.md` is up to date in the same commits, and the
+token never reaches IndexedDB or the console.
 
 The two-device suite also covers this round's fixes:
 
