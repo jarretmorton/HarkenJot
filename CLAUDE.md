@@ -532,6 +532,13 @@ library).
 - **Phase 3 (v1.66.0)** added **Pull-only** mode: the repo's changes come into this device, and
   nothing goes back. Two-way Sync is still shown but disabled. With the mode Off, GitHub is contacted
   only when a Settings button is pressed.
+- **v1.67.0** fixed what the Phase 3 field test found:
+  - hand edits on github.com lost to the device's copy;
+  - a pull that failed while Android still reported being online never retried;
+  - the log hid successful pulls;
+  - skipped files weren't named.
+
+  It also added `INDEX.md`.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -542,6 +549,7 @@ or save.
 
 ```
 harkenjot.json               {"app":"HarkenJot","schemaVersion":1}
+INDEX.md                     generated table of every source (title → folder, status, type, added); never read back
 failed-links.json            {"schema":1,"links":{<normalizeUrlKey>: entry | {"removed":true,"removedAt"}}}
 sources/<id>/meta.json       the source at creation, minus content/sentences/status/isRead; written once
 sources/<id>/text.txt        the source's content (article/pdf/text only); written once
@@ -651,6 +659,33 @@ Four rules a pull keeps:
   as pending, so the next push replaces it.
 - **A newer `schemaVersion` stops the pull** before anything is read.
 
+**The merge is three-way without storing a base (`_rebase`).** Before `mergeFile`, every register
+and note this device hasn't changed itself is replaced with the repo's version. "Changed itself"
+means stamped with this device's name and either after `sync_meta.lastPullAt`, or in a file still
+pending. Anything else is just the repo's earlier version, so a difference in the repo now is a newer
+edit.
+
+This is what makes hand edits on github.com work. A person changes the value and leaves `updatedAt`
+alone, or sets it by hand in the wrong timezone. Under plain last-writer-wins, the tie went to
+canonical order: "complete" could never beat "in-progress" at an equal timestamp, so a status could
+be changed once and never back. Only this device's own changes still compete on `updatedAt`.
+`copiedAt` is excluded and keeps its sticky rule.
+
+**A pull that couldn't reach GitHub retries itself** after 30 s, 1 min, 2 min, then every 5 min, and
+shows grey (offline) rather than red. Android can keep `navigator.onLine` true through airplane mode,
+so the `online` event never fires to wake it. Returning to the app also retries at once after a
+failed or offline pull, instead of waiting out the five minutes.
+
+**What a pull skips, it names:** the path and the reason (`empty`, `not valid JSON`, or `needs a
+"type" and a "title"` for a new source whose `meta.json` doesn't say what it is). Every outcome is
+logged; a repeat of the latest line updates that entry's time and count instead of adding a new one.
+
+**`INDEX.md` lets a person find a source without its id.** It is a table of every live source, newest
+first, each title linking to its folder. Initialise writes it, and **Write index** in Settings
+rewrites it through the contents API with the file's `sha`, which needs a read-and-write token.
+Phase 4's push will keep it current. It is built from the writing device's library and never read
+back.
+
 **Positions are stamped by sync, not as they change,** because they are written every second. Any
 position that differs from `sync_meta.positions` (the value last synced) is stamped "now" when a sync
 notices it. A device's first pull takes today's positions as the baseline instead of stamping them all.
@@ -705,6 +740,15 @@ in-memory mock. The mock uses real git blob SHAs, flat trees, `base_tree` chaini
 ref updates. That covers the paths a real repo would otherwise be needed for: an empty repo, a public
 repo, the app's own repo, a second Initialise, a branch moving mid-upload, a revoked token and a
 missing repo.
+
+The two-device suite also covers this round's fixes:
+
+- repeated hand edits that keep the same `updatedAt`;
+- an unsent local change against an older and then a newer repo edit;
+- empty and typeless files;
+- GitHub unreachable while the browser reports being online, then the automatic retry;
+- log collapsing;
+- `INDEX.md` written by a read-and-write token and refused for a read-only one.
 
 Pull is tested with two browser contexts (separate storage, like two devices) against the same mock,
 with a read-only token that the mock refuses on every write. It covers the join, remote edits
