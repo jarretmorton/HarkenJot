@@ -541,6 +541,9 @@ library).
   It also added `INDEX.md`.
 - **Phase 4 (v1.68.0)** added two-way **Sync**: a pull, then a push of what is still waiting.
   `INDEX.md` now rides along with every push, and the manual Write index button is gone.
+- **v1.68.1** fixed two things the Phase 4 field test found:
+  - a local edit lost to a repo version stamped in the future (`_stampAfter`);
+  - the mass-delete guard offered no way back (**Undo the deletions**).
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -587,6 +590,14 @@ Every merge rule must keep those three properties:
 Every path that edits the library — `updateSource`, delete, undo, move-to-today, additive import —
 therefore gets stamped without touching that path. A new way of editing sources or notes needs nothing
 extra, as long as it goes through `setSources` / `setNotes`.
+
+**A local change is stamped after the version it replaced (`_stampAfter`):** at
+`max(now, that version's updatedAt + 1 ms)`. It never just gets "now". A hand edit or an agent can
+leave a register stamped in the future. The field test did exactly that: an example in the
+instructions used tomorrow's date. Every real edit made here then lost the merge until that hour
+passed, and the status simply never synced. An edit is made after its device saw the current value,
+so it must outrank it. The same rule stamps deletes, undos, note edits, sync-time position stamps and
+the open source's kept position.
 
 Three rules the recorder follows:
 
@@ -713,6 +724,17 @@ them, newly deleted relative to the repo. Nothing is sent. The status becomes `c
 Settings offers **Send the deletions**, which re-runs the sync with `confirmDeletes`. The pull half
 still runs meanwhile.
 
+Settings also offers **Undo the deletions** (`undoHeldDeletions`). The held deletions never reached
+the repo, so the guard records exactly which sources and notes they were. Undo works in three steps:
+
+1. it drops those tombstones;
+2. it forgets the repo SHAs of their files, and sets `sync_meta.commit` to null so the next sync lists
+   the tree rather than stopping at "nothing moved";
+3. that sync reads the sources and notes back from the repo, where they were never deleted.
+
+A local delete can't be undone any other way once its 5-second toast is gone, because Import All is
+refused while a repo is set.
+
 **When Sync runs.** It runs on every pull trigger, plus:
 
 - **A minute after the last edit.** `HJSync.record*` return true for any real change, App debounces a
@@ -792,6 +814,8 @@ covers the plan's acceptance tests T1–T12 and T14:
 - **Concurrency and failure:** both devices syncing at once, a revoked token, a 12-source delete
   waiting for confirmation.
 - **Triggers:** the one-minute debounce, the sync on going to the background.
+- **v1.68.1 fixes:** an edit beating a repo version stamped two days ahead (T15), and Undo the
+  deletions restoring all 12 sources with nothing sent (T14a).
 
 **Pass** means both devices end identical, `INDEX.md` is up to date in the same commits, and the
 token never reaches IndexedDB or the console.

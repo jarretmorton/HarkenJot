@@ -2783,7 +2783,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.68.0';
+    const APP_VERSION = '1.68.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4164,6 +4164,14 @@
       _stamp() {
         return { t: new Date().toISOString(), by: (this.getConfig() || {}).device || 'device' };
       },
+      // A change made here comes after the version it replaced, so it is
+      // stamped later than that version even when the version claims a time
+      // still ahead of this clock — a hand edit or an agent writing a future
+      // updatedAt would otherwise beat every real edit until that hour passed.
+      _stampAfter(...prev) {
+        const floor = Math.max(0, ...prev.map(t => (t ? Date.parse(t) || 0 : 0)));
+        return { t: new Date(Math.max(Date.now(), floor + 1)).toISOString(), by: (this.getConfig() || {}).device || 'device' };
+      },
       _same(a, b) {
         return a === b || (a && b && typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
       },
@@ -4175,20 +4183,21 @@
         if (prev === next || !this.isConfigured()) return false;
         this.markDirty();
         const clock = this._clock();
-        const stamp = this._stamp();
+        const fc = (id) => clock.sources[id] || {};
         const prevById = new Map(prev.map(s => [s.id, s]));
         const nextById = new Map(next.map(s => [s.id, s]));
         let changed = false;
         prevById.forEach((p, id) => {
-          if (!nextById.has(id)) { clock.sourceTombstones[id] = stamp; changed = true; }
+          if (!nextById.has(id)) { clock.sourceTombstones[id] = this._stampAfter((fc(id).deleted || {}).t); changed = true; }
         });
         nextById.forEach((n, id) => {
           const p = prevById.get(id);
           if (!p) {
             // Back from an undo: a newer "not deleted" outranks the tombstone.
             if (clock.sourceTombstones[id]) {
+              const undone = this._stampAfter(clock.sourceTombstones[id].t);
               delete clock.sourceTombstones[id];
-              clock.sources[id] = Object.assign({}, clock.sources[id], { deleted: stamp });
+              clock.sources[id] = Object.assign({}, clock.sources[id], { deleted: undone });
               changed = true;
             }
             return;
@@ -4196,7 +4205,10 @@
           if (p === n) return;
           new Set(Object.keys(p).concat(Object.keys(n))).forEach(k => {
             if (k === 'id' || k === 'content' || k === 'sentences' || this._same(p[k], n[k])) return;
-            clock.sources[id] = Object.assign({}, clock.sources[id], { [k]: stamp });
+            // status and isRead are one register in the repo, so either one's
+            // stamp is the version this change replaces.
+            const before = (k === 'status' || k === 'isRead') ? [(fc(id).status || {}).t, (fc(id).isRead || {}).t] : [(fc(id)[k] || {}).t];
+            clock.sources[id] = Object.assign({}, clock.sources[id], { [k]: this._stampAfter(...before) });
             changed = true;
           });
         });
@@ -4211,7 +4223,7 @@
         if (prev === next || !this.isConfigured()) return false;
         this.markDirty();
         const clock = this._clock();
-        const stamp = this._stamp();
+        const noteT = (id, note) => (clock.notes[id] || {}).t || (note && note.createdAt);
         const prevById = new Map(prev.map(n => [n.id, n]));
         const nextById = new Map(next.map(n => [n.id, n]));
         let liveSources = null;
@@ -4220,7 +4232,7 @@
           if (nextById.has(id)) return;
           liveSources = liveSources || new Set(sources.map(s => s.id));
           if (!liveSources.has(p.sourceId)) return;
-          clock.noteTombstones[id] = Object.assign({ sourceId: p.sourceId }, stamp);
+          clock.noteTombstones[id] = Object.assign({ sourceId: p.sourceId }, this._stampAfter(noteT(id, p)));
           delete clock.notes[id];
           changed = true;
         });
@@ -4228,15 +4240,16 @@
           const p = prevById.get(id);
           if (!p) {
             if (clock.noteTombstones[id]) {
+              const undone = this._stampAfter(clock.noteTombstones[id].t);
               delete clock.noteTombstones[id];
-              clock.notes[id] = stamp;
+              clock.notes[id] = undone;
               changed = true;
             }
             return;
           }
           if (p === n) return;
           const differs = Object.keys(p).concat(Object.keys(n)).some(k => !this._same(p[k], n[k]));
-          if (differs) { clock.notes[id] = stamp; changed = true; }
+          if (differs) { clock.notes[id] = this._stampAfter(noteT(id, p)); changed = true; }
         });
         if (changed) this._saveClock(clock);
         return true;
@@ -4610,10 +4623,9 @@
       // the change rather than as it happens: one that differs from the value
       // last synced counts as changed now.
       _stampPositions(clock, reader, media, synced) {
-        const stamp = this._stamp();
         [[reader, synced.reader || {}], [media, synced.media || {}]].forEach(([now, then]) => {
           Object.keys(now).forEach(id => {
-            if (now[id] !== then[id]) clock.sources[id] = { ...clock.sources[id], position: stamp };
+            if (now[id] !== then[id]) clock.sources[id] = { ...clock.sources[id], position: this._stampAfter(((clock.sources[id] || {}).position || {}).t) };
           });
         });
       },
@@ -4738,6 +4750,7 @@
 
         const out = {};
         let deletedSources = 0, deletedNotes = 0;
+        const heldSources = [], heldNotes = [];
         for (const p of pending) {
           if (files[p] === undefined) continue;
           if (this._writeOnce(p)) { if (!remote[p]) out[p] = files[p]; continue; }
@@ -4755,18 +4768,20 @@
             // A source made and deleted here before it ever reached the repo
             // has nothing there to delete.
             if (!was) continue;
-            if (!(was.deleted && was.deleted.value === true)) deletedSources++;
+            if (!(was.deleted && was.deleted.value === true)) { deletedSources++; heldSources.push(HJSyncCore.folderOf(p)); }
           }
           if (p.endsWith('/notes.json') && was) {
             const before = was.notes || {}, nowNotes = now.notes || {};
-            Object.keys(nowNotes).forEach(id => { if (nowNotes[id].deleted && before[id] && !before[id].deleted) deletedNotes++; });
+            Object.keys(nowNotes).forEach(id => {
+              if (nowNotes[id].deleted && before[id] && !before[id].deleted) { deletedNotes++; heldNotes.push({ id, folder: HJSyncCore.folderOf(p) }); }
+            });
           }
           out[p] = content;
         }
 
         const totalNotes = after.notes.length + deletedNotes;
         if (!confirmDeletes && (deletedSources > 10 || deletedNotes > Math.max(20, Math.round(totalNotes * 0.2)))) {
-          return { needsConfirm: { sources: deletedSources, notes: deletedNotes } };
+          return { needsConfirm: { sources: deletedSources, notes: deletedNotes, sourceIds: heldSources, noteIds: heldNotes } };
         }
 
         const folders = new Set(Object.keys(out).map(p => HJSyncCore.folderOf(p)).filter(Boolean));
@@ -4800,6 +4815,31 @@
         HJStore.set('sync_meta', { ...meta, commit: c.commit, tree: c.tree, shas, localShas, pending: [], lastPullAt: new Date().toISOString() })
           .catch((e) => console.error('Failed to save sync state:', e));
         return { sent: folders.size, root: rootChanged, deletedSources, deletedNotes, commit: c.commit };
+      },
+
+      // Take back the deletions the guard held. Their tombstones go, and the
+      // repo files' SHAs are forgotten, so the next sync reads those sources
+      // and notes back from the repo — where they were never deleted.
+      undoHeldDeletions() {
+        const held = this._status.state === 'confirm' && this._status.confirm;
+        if (!held) return 0;
+        const clock = this._clock();
+        const meta = HJStore.get('sync_meta') || {};
+        const shas = { ...meta.shas };
+        (held.sourceIds || []).forEach(id => {
+          delete clock.sourceTombstones[id];
+          Object.keys(shas).forEach(p => { if (p.startsWith(`sources/${id}/`)) delete shas[p]; });
+        });
+        (held.noteIds || []).forEach(({ id, folder }) => {
+          delete clock.noteTombstones[id];
+          delete shas[`sources/${folder}/notes.json`];
+        });
+        this._saveClock(clock);
+        // A null commit makes the next sync list the tree instead of
+        // stopping at "nothing moved".
+        HJStore.set('sync_meta', { ...meta, shas, commit: null }).catch(() => {});
+        this._log(`Took back ${held.sources} source deletion${held.sources !== 1 ? 's' : ''}${held.notes ? ` and ${held.notes} note deletion${held.notes !== 1 ? 's' : ''}` : ''}; reading them back from the repo`);
+        return held.sources + held.notes;
       },
 
       // Something changed here that hasn't been sent yet.
@@ -5087,7 +5127,7 @@
               if (id === local.currentSourceId) {
                 // The device in use keeps its place, and stamping it now makes
                 // that position the one a later sync carries.
-                clock.sources[id] = { ...clock.sources[id], position: this._stamp() };
+                clock.sources[id] = { ...clock.sources[id], position: this._stampAfter(((clock.sources[id] || {}).position || {}).t) };
                 mergedDiffers[statePath] = true;
               } else {
                 map[id] = at;
@@ -5180,7 +5220,8 @@ the later \`updatedAt\` wins, field by field.
 1. **Never write \`notes.json\`.** Those are the owner's notes. Write to \`ai-notes.jsonl\` instead.
 2. **Never delete or rename a file or folder.** Deleting is done by setting \`deleted\`.
 3. **Change only the state fields you own,** and stamp each one you change with \`updatedAt\` (now,
-   UTC) and \`by\` (your agent's name). Leave every other field exactly as you found it.
+   UTC — never a time in the future) and \`by\` (your agent's name). Leave every other field exactly
+   as you found it.
 4. **Write with the file's \`sha\`.** Use \`PUT /repos/{owner}/{repo}/contents/{path}\` with the \`sha\`
    you just read. On a 409 or 422, read the file again, re-apply your change and retry.
 5. **Append to \`ai-notes.jsonl\`; never rewrite lines.** One object per line:
@@ -14976,7 +15017,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               {!busy && mode === 'sync' && syncStatus.state === 'confirm' && (
                 <div className="settings-actions">
                   <button className="btn btn-primary" onClick={() => handlePull({ confirmDeletes: true })}>Send the deletions</button>
-                  <span className="settings-meta">Or undo them here first; nothing is sent until you choose.</span>
+                  <button className="btn btn-secondary" onClick={() => { HJSync.undoHeldDeletions(); handlePull(); }}>Undo the deletions</button>
+                  <span className="settings-meta">Nothing is sent until you choose. Undo brings them back from the repo, notes included.</span>
                 </div>
               )}
               {mode !== 'off' && (
