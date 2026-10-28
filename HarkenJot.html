@@ -414,6 +414,7 @@
 
     /* Header */
     .header {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -452,6 +453,34 @@
       font-size: 0.7rem;
       color: var(--text-muted);
       margin-top: -0.125rem;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .settings-button {
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .settings-button:hover,
+    .settings-button.active {
+      color: var(--accent);
+      border-color: var(--accent);
     }
 
     /* Navigation */
@@ -2253,6 +2282,111 @@
       border-color: var(--accent);
     }
 
+    /* Settings */
+    .settings-view {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding-bottom: 1rem;
+    }
+
+    .settings-card {
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 1rem 1.25rem;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 2px 12px var(--shadow);
+    }
+
+    .settings-card h2 {
+      font-family: 'Crimson Pro', serif;
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .settings-help {
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+
+    .settings-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .settings-field label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .settings-field .url-input {
+      padding: 0.6rem 0.8rem;
+    }
+
+    .settings-modes {
+      display: flex;
+      gap: 0.25rem;
+      padding: 0.25rem;
+      background: var(--bg-secondary);
+      border-radius: 10px;
+    }
+
+    .settings-mode {
+      flex: 1;
+      padding: 0.45rem 0.5rem;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .settings-mode.active {
+      background: white;
+      color: var(--text-primary);
+      box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .settings-mode:disabled:not(.active) {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .settings-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .settings-meta {
+      font-size: 0.75rem;
+      line-height: 1.5;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .settings-meta code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
     /* Library Actions */
     .library-actions {
       display: flex;
@@ -2323,6 +2457,16 @@
         flex-direction: column;
         gap: 0.5rem;
         padding: 0.75rem 1rem;
+      }
+
+      /* The header stacks here, so the gear sits in the logo row's empty
+         corner rather than squeezing a fifth button into the tab row. */
+      .settings-button {
+        position: absolute;
+        top: 0.75rem;
+        right: 1rem;
+        width: 34px;
+        height: 34px;
       }
 
       .library-actions {
@@ -2418,6 +2562,10 @@
     @media (max-height: 700px) {
       .header {
         padding: 0.5rem 1rem;
+      }
+
+      .settings-button {
+        top: 0.5rem;
       }
 
       .logo-tagline {
@@ -2537,6 +2685,7 @@
       // same visual weight as the buttons beside it. Rotated for the collapsed
       // state rather than swapped for a second glyph.
       Chevron: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
+      Settings: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
       Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
       Image: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>,
       NotebookLM: ({size = 16} = {}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><path d="M11.999 3.201C5.372 3.201 0 8.528 0 15.101V20.8h2.212v-.568c0-2.666 2.178-4.827 4.866-4.827 2.688 0 4.866 2.16 4.866 4.827v.568h2.212v-.568c0-3.877-3.17-7.019-7.078-7.019A7.075 7.075 0 0 0 2.992 14.5a7.355 7.355 0 0 1 6.568-4.016c4.057 0 7.347 3.264 7.347 7.287V20.8h2.212V17.77c0-5.235-4.28-9.481-9.56-9.481a9.563 9.563 0 0 0-6.217 2.28A9.795 9.795 0 0 1 12 5.393c5.406 0 9.788 4.346 9.788 9.707V20.8H24V15.1c-.001-6.573-5.373-11.9-12.001-11.9Z"/></svg>,
@@ -2546,7 +2695,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.63.2';
+    const APP_VERSION = '1.64.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3342,7 +3491,8 @@
       _dbName: 'harkenjot',
       _store: 'kv',
       _handleStore: 'audioHandles',
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache', 'failed_links'],
+      // sync_clock only ever holds anything once GitHub sync is configured (see HJSync).
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache', 'failed_links', 'sync_clock'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
@@ -3354,6 +3504,7 @@
         net_hints: 'harkenjot_net_hints',
         feed_cache: 'harkenjot_feed_cache',
         failed_links: 'harkenjot_failed_links',
+        sync_clock: 'harkenjot_sync_clock',
       },
 
       _open() {
@@ -3545,6 +3696,492 @@
           tx.onerror = () => reject(tx.error);
         });
       },
+    };
+
+    // ─── GitHub sync ───────────────────────────────────────────────────────
+    //
+    // Optional. With no repo configured nothing below runs, and the library
+    // lives only in IndexedDB exactly as before. See "GitHub sync" in CLAUDE.md.
+    //
+    // HJSyncCore is the pure half — the repo's file formats and the merge rules
+    // — with no DOM, storage or network, so it can be exercised outside the
+    // browser (the markers below are what a test harness slices out). Every
+    // merge is commutative, associative and idempotent: two devices that merge
+    // the same files in any order end up with byte-identical results, which is
+    // what lets sync run without ever asking which copy to keep.
+    /* HJSYNC-CORE-START */
+    const HJSyncCore = (() => {
+      const SCHEMA_VERSION = 1;
+      const STATUS_TO_REPO = { unread: 'not-started', inProgress: 'in-progress', read: 'complete' };
+      const STATUS_FROM_REPO = { 'not-started': 'unread', 'in-progress': 'inProgress', complete: 'read' };
+      const MEDIA_TYPES = new Set(['youtube', 'podcast', 'xvideo']);
+      // Never in meta.json: the text has its own file, sentences are derived
+      // from it at runtime, and status (with the legacy isRead) lives in state.
+      const META_EXCLUDE = new Set(['content', 'sentences', 'status', 'isRead']);
+      // Never a state register of its own: identity, the text, derived fields,
+      // and the ones state.json spells out explicitly.
+      const STATE_SKIP = new Set(['id', 'content', 'sentences', 'isRead', 'status', 'deleted', 'position']);
+
+      const sortKeys = (v) => {
+        if (Array.isArray(v)) return v.map(sortKeys);
+        if (v && typeof v === 'object') {
+          const out = {};
+          Object.keys(v).sort().forEach(k => { if (v[k] !== undefined) out[k] = sortKeys(v[k]); });
+          return out;
+        }
+        return v;
+      };
+      // One spelling per value — sorted keys, 2-space indent, trailing newline.
+      // Byte-identical output is what makes a git blob SHA a reliable "has this
+      // changed?" test, and it keeps git diffs to one record per hunk.
+      const canonical = (v) => JSON.stringify(sortKeys(v), null, 2) + '\n';
+      const ms = (iso) => { const n = Date.parse(iso); return isFinite(n) ? n : 0; };
+
+      // Total order on stamped records: later updatedAt, then device name, then
+      // canonical text. Every tie still has exactly one winner, so the result
+      // never depends on which side happens to be "local".
+      const cmpStamped = (a, b) => {
+        const d = ms(a.updatedAt) - ms(b.updatedAt);
+        if (d) return d;
+        const ba = String(a.by || ''), bb = String(b.by || '');
+        if (ba !== bb) return ba < bb ? -1 : 1;
+        const ca = canonical(a), cb = canonical(b);
+        return ca === cb ? 0 : (ca < cb ? -1 : 1);
+      };
+      const newer = (a, b) => (!a ? b : !b ? a : (cmpStamped(a, b) >= 0 ? a : b));
+      // An agent may write a bare value; read it as a register that was never stamped.
+      const asReg = (v) => (v && typeof v === 'object' && !Array.isArray(v) && 'value' in v) ? v : { value: v === undefined ? null : v };
+
+      // copiedAt is sticky: once any writer has set it a null never clears it,
+      // and between two set values the first one stands.
+      const mergeCopied = (a, b) => {
+        if (!a) return b;
+        if (!b) return a;
+        const sa = a.value != null, sb = b.value != null;
+        if (sa !== sb) return sa ? a : b;
+        if (!sa) return newer(a, b);
+        return cmpStamped(a, b) <= 0 ? a : b;
+      };
+
+      // state.json — each field is its own last-writer-wins register, so a
+      // speed change on one device and a status change on the other both survive.
+      const mergeState = (a, b) => {
+        const out = { schema: Math.max(a.schema || 1, b.schema || 1) };
+        const keys = new Set(Object.keys(a).concat(Object.keys(b)));
+        keys.delete('schema');
+        keys.forEach(k => {
+          const ra = k in a ? asReg(a[k]) : null;
+          const rb = k in b ? asReg(b[k]) : null;
+          out[k] = k === 'copiedAt' ? mergeCopied(ra, rb) : newer(ra, rb);
+        });
+        return out;
+      };
+
+      // notes.json — union by note id; a deletion is a record in the same map
+      // ({ deleted: true }), so it competes on updatedAt like any edit and an
+      // older copy of the note can never bring it back.
+      const mergeNotes = (a, b) => {
+        const notes = Object.assign({}, a.notes || {});
+        Object.keys(b.notes || {}).forEach(id => { notes[id] = newer(notes[id], b.notes[id]); });
+        return { schema: Math.max(a.schema || 1, b.schema || 1), notes };
+      };
+
+      // failed-links.json — keyed by normalizeUrlKey. A removal is a record in
+      // the same map, and wins a tie, so a link cleared on one device stays
+      // cleared unless it genuinely fails again later.
+      const linkTime = (l) => ms(l.removed ? l.removedAt : l.lastFailedAt);
+      const newerLink = (a, b) => {
+        if (!a) return b;
+        if (!b) return a;
+        const d = linkTime(a) - linkTime(b);
+        if (d) return d > 0 ? a : b;
+        if (!!a.removed !== !!b.removed) return a.removed ? a : b;
+        return canonical(a) >= canonical(b) ? a : b;
+      };
+      const mergeFailedLinks = (a, b) => {
+        const links = Object.assign({}, a.links || {});
+        Object.keys(b.links || {}).forEach(k => { links[k] = newerLink(links[k], b.links[k]); });
+        return { schema: Math.max(a.schema || 1, b.schema || 1), links };
+      };
+
+      // Written once, so two versions only meet if the same id was created
+      // twice. Any fixed rule will do, as long as both sides pick the same one.
+      const pickFixed = (a, b) => (a <= b ? a : b);
+
+      // Merge two versions of one repo file. Returns null for a path that is not
+      // HarkenJot's to merge (ai-notes.jsonl, README.md, anything an agent adds),
+      // and throws on unparseable JSON — the caller decides what to do with that,
+      // never this function.
+      const mergeFile = (path, a, b) => {
+        if (a == null) return b;
+        if (b == null) return a;
+        if (path.endsWith('/state.json')) return canonical(mergeState(JSON.parse(a), JSON.parse(b)));
+        if (path.endsWith('/notes.json')) return canonical(mergeNotes(JSON.parse(a), JSON.parse(b)));
+        if (path === 'failed-links.json') return canonical(mergeFailedLinks(JSON.parse(a), JSON.parse(b)));
+        if (path.endsWith('/meta.json')) return pickFixed(canonical(JSON.parse(a)), canonical(JSON.parse(b)));
+        if (path.endsWith('/text.txt')) return pickFixed(a, b);
+        if (path === 'harkenjot.json') {
+          const pa = JSON.parse(a), pb = JSON.parse(b);
+          return canonical(Object.assign({}, pa, pb, { schemaVersion: Math.max(pa.schemaVersion || 1, pb.schemaVersion || 1) }));
+        }
+        return null;
+      };
+
+      const emptyClock = () => ({ sources: {}, notes: {}, sourceTombstones: {}, noteTombstones: {}, failedRemoved: {} });
+
+      // The local library → the repo's files ({ path: text }). `clock` is the
+      // sync_clock record of when (and on which device) each field, note and
+      // deletion last changed. A register with no stamp is written bare
+      // ({ value }), which every stamped change outranks.
+      const libraryToFiles = ({ sources = [], notes = [], failedLinks = [], positions = {} }, clock) => {
+        const c = Object.assign(emptyClock(), clock || {});
+        const files = {};
+        const readerPos = positions.reader || {}, mediaPos = positions.media || {};
+        files['harkenjot.json'] = canonical({ app: 'HarkenJot', schemaVersion: SCHEMA_VERSION });
+
+        const liveIds = new Set(sources.map(s => s && s.id).filter(Boolean));
+        const notesBySource = {};
+        const addNoteRecord = (sourceId, rec) => { (notesBySource[sourceId] = notesBySource[sourceId] || {})[rec.id] = rec; };
+        notes.forEach(n => {
+          if (!n || !n.id) return;
+          const st = c.notes[n.id];
+          addNoteRecord(n.sourceId, Object.assign({}, n, { updatedAt: st ? st.t : n.createdAt, by: st ? st.by : undefined }));
+        });
+        Object.keys(c.noteTombstones).forEach(id => {
+          const t = c.noteTombstones[id];
+          if (notesBySource[t.sourceId] && notesBySource[t.sourceId][id]) return; // restored since
+          addNoteRecord(t.sourceId, { id, sourceId: t.sourceId, deleted: true, updatedAt: t.t, by: t.by });
+        });
+
+        sources.forEach(s => {
+          if (!s || !s.id) return;
+          const dir = `sources/${s.id}/`;
+          const fc = c.sources[s.id] || {};
+          const reg = (field, value) => {
+            const st = fc[field];
+            return st ? { value, updatedAt: st.t, by: st.by } : { value };
+          };
+
+          const meta = {};
+          Object.keys(s).forEach(k => { if (!META_EXCLUDE.has(k)) meta[k] = s[k]; });
+          // A blob: URL is a handle into this tab's memory, meaningless anywhere else.
+          if (typeof meta.audioUrl === 'string' && meta.audioUrl.startsWith('blob:')) delete meta.audioUrl;
+          files[dir + 'meta.json'] = canonical(meta);
+          if (typeof s.content === 'string' && s.content) files[dir + 'text.txt'] = s.content;
+
+          const state = { schema: SCHEMA_VERSION };
+          // updateSource sets status and isRead together; either stamp dates it.
+          const statusStamp = fc.status && fc.isRead ? (ms(fc.status.t) >= ms(fc.isRead.t) ? fc.status : fc.isRead) : (fc.status || fc.isRead);
+          const statusValue = STATUS_TO_REPO[getReadStatus(s)];
+          state.status = statusStamp ? { value: statusValue, updatedAt: statusStamp.t, by: statusStamp.by } : { value: statusValue };
+          state.title = reg('title', s.title === undefined ? null : s.title);
+          state.createdAt = reg('createdAt', s.createdAt === undefined ? null : s.createdAt);
+          state.deleted = reg('deleted', false);
+          if (s.speed !== undefined || fc.speed) state.speed = reg('speed', s.speed === undefined ? null : s.speed);
+          const isMedia = MEDIA_TYPES.has(s.type);
+          const pos = (isMedia ? mediaPos : readerPos)[s.id];
+          if (pos !== undefined) state.position = reg('position', { unit: isMedia ? 'seconds' : 'sentence', at: pos });
+          // Any other field that has changed since the source was created.
+          Object.keys(fc).forEach(k => {
+            if (k in state || STATE_SKIP.has(k)) return;
+            state[k] = reg(k, s[k] === undefined ? null : s[k]);
+          });
+          if (s.copiedAt != null && !state.copiedAt) state.copiedAt = reg('copiedAt', s.copiedAt);
+          files[dir + 'state.json'] = canonical(state);
+          files[dir + 'notes.json'] = canonical({ schema: SCHEMA_VERSION, notes: notesBySource[s.id] || {} });
+        });
+
+        // A deleted source is only its deletion: whatever else it had is
+        // already in the repo, and stays there.
+        Object.keys(c.sourceTombstones).forEach(id => {
+          if (liveIds.has(id)) return; // restored since
+          const t = c.sourceTombstones[id];
+          files[`sources/${id}/state.json`] = canonical({ schema: SCHEMA_VERSION, deleted: { value: true, updatedAt: t.t, by: t.by } });
+        });
+        // Notes whose source is neither here nor deleted (orphans in older
+        // libraries) still go somewhere, so nothing is dropped on the way.
+        Object.keys(notesBySource).forEach(sourceId => {
+          if (!sourceId || sourceId === 'undefined' || liveIds.has(sourceId) || c.sourceTombstones[sourceId]) return;
+          files[`sources/${sourceId}/notes.json`] = canonical({ schema: SCHEMA_VERSION, notes: notesBySource[sourceId] });
+        });
+
+        const links = {};
+        failedLinks.forEach(f => { const k = normalizeUrlKey(f && f.url); if (k) links[k] = f; });
+        Object.keys(c.failedRemoved).forEach(k => { if (!links[k]) links[k] = { removed: true, removedAt: c.failedRemoved[k] }; });
+        files['failed-links.json'] = canonical({ schema: SCHEMA_VERSION, links });
+        return files;
+      };
+
+      // The repo's files → a local library plus the clock that reproduces them.
+      // libraryToFiles(filesToLibrary(f)) === f for any f libraryToFiles wrote.
+      const filesToLibrary = (files) => {
+        const out = { sources: [], notes: [], failedLinks: [], positions: { reader: {}, media: {} }, clock: emptyClock() };
+        const dirs = {};
+        Object.keys(files).forEach(p => {
+          const m = /^sources\/([^/]+)\/([^/]+)$/.exec(p);
+          if (m) (dirs[m[1]] = dirs[m[1]] || {})[m[2]] = files[p];
+        });
+        Object.keys(dirs).forEach(id => {
+          const d = dirs[id];
+          const state = d['state.json'] ? JSON.parse(d['state.json']) : {};
+          const del = state.deleted !== undefined ? asReg(state.deleted) : null;
+          if (del && del.value === true) {
+            out.clock.sourceTombstones[id] = { t: del.updatedAt, by: del.by };
+            return;
+          }
+          if (d['meta.json']) {
+            const source = Object.assign(JSON.parse(d['meta.json']), { id });
+            const fc = {};
+            Object.keys(state).forEach(k => {
+              if (k === 'schema') return;
+              const r = asReg(state[k]);
+              if (r.updatedAt !== undefined || r.by !== undefined) fc[k] = { t: r.updatedAt, by: r.by };
+              if (k === 'deleted') return;
+              if (k === 'status') {
+                const status = STATUS_FROM_REPO[r.value] || 'unread';
+                source.status = status;
+                source.isRead = status === 'read';
+              } else if (k === 'position') {
+                if (r.value && r.value.at !== undefined) out.positions[r.value.unit === 'seconds' ? 'media' : 'reader'][id] = r.value.at;
+              } else {
+                source[k] = r.value;
+              }
+            });
+            if (d['text.txt'] !== undefined) source.content = d['text.txt'];
+            if (Object.keys(fc).length) out.clock.sources[id] = fc;
+            out.sources.push(source);
+          }
+          if (d['notes.json']) {
+            const doc = JSON.parse(d['notes.json']);
+            Object.keys(doc.notes || {}).forEach(nid => {
+              const rec = doc.notes[nid];
+              if (rec.deleted) {
+                out.clock.noteTombstones[nid] = { sourceId: rec.sourceId || id, t: rec.updatedAt, by: rec.by };
+                return;
+              }
+              const note = Object.assign({}, rec);
+              delete note.updatedAt;
+              delete note.by;
+              if (rec.by !== undefined || rec.updatedAt !== note.createdAt) out.clock.notes[nid] = { t: rec.updatedAt, by: rec.by };
+              out.notes.push(note);
+            });
+          }
+        });
+        out.sources.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
+        if (files['failed-links.json']) {
+          const links = JSON.parse(files['failed-links.json']).links || {};
+          Object.keys(links).forEach(k => {
+            if (links[k].removed) out.clock.failedRemoved[k] = links[k].removedAt;
+            else out.failedLinks.push(links[k]);
+          });
+          out.failedLinks.sort((a, b) => ms(b.lastFailedAt) - ms(a.lastFailedAt));
+        }
+        return out;
+      };
+
+      const hex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      // The SHA git itself would give this text as a blob, so a local file can
+      // be compared with the repo's tree without downloading anything.
+      const gitBlobSha = async (text) => {
+        const body = new TextEncoder().encode(text);
+        const head = new TextEncoder().encode('blob ' + body.length + String.fromCharCode(0));
+        const all = new Uint8Array(head.length + body.length);
+        all.set(head);
+        all.set(body, head.length);
+        return hex(await crypto.subtle.digest('SHA-1', all));
+      };
+      // A short hash of what sync makes identical — ids, statuses, titles, note
+      // text — so two devices can be compared at a glance in Settings.
+      const fingerprint = async (sources, notes) => {
+        const lines = sources.map(s => `s ${s.id} ${getReadStatus(s)} ${s.title || ''}`)
+          .concat(notes.map(n => `n ${n.id} ${n.sourceId} ${n.text || ''}`))
+          .sort();
+        return hex(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(lines.join('\n')))).slice(0, 8);
+      };
+
+      return { SCHEMA_VERSION, STATUS_TO_REPO, canonical, mergeState, mergeNotes, mergeFailedLinks, mergeFile, libraryToFiles, filesToLibrary, emptyClock, gitBlobSha, fingerprint };
+    })();
+    /* HJSYNC-CORE-END */
+
+    // HJSync is the stateful half: this device's settings, and the record of
+    // what changed locally (sync_clock) that gives the merge its timestamps and
+    // tombstones. Recording starts the moment a repo is configured — paused
+    // included, so pausing never loses a delete — and every method is a no-op
+    // before that.
+    //
+    // The token lives in localStorage under its own key: never in HJStore,
+    // never in an export, never in a URL, never in a log line.
+    const HJSync = {
+      _configKey: 'harkenjot_sync_config',
+      _tokenKey: 'harkenjot_gh_token',
+      _backupKey: 'harkenjot_last_backup',
+      _config: undefined,
+
+      getConfig() {
+        if (this._config === undefined) {
+          try { this._config = JSON.parse(localStorage.getItem(this._configKey)) || null; } catch (e) { this._config = null; }
+        }
+        return this._config;
+      },
+      saveConfig(cfg) {
+        this._config = cfg || null;
+        try {
+          if (cfg) localStorage.setItem(this._configKey, JSON.stringify(cfg));
+          else localStorage.removeItem(this._configKey);
+        } catch (e) { console.error('Failed to save sync settings'); }
+      },
+      isConfigured() {
+        const c = this.getConfig();
+        return !!(c && c.owner && c.repo);
+      },
+      hasToken() {
+        try { return !!localStorage.getItem(this._tokenKey); } catch (e) { return false; }
+      },
+      setToken(token) {
+        try { localStorage.setItem(this._tokenKey, token); } catch (e) { console.error('Failed to save token'); }
+      },
+      clearToken() {
+        try { localStorage.removeItem(this._tokenKey); } catch (e) { /* nothing to clear */ }
+      },
+      lastBackupAt() {
+        try { return localStorage.getItem(this._backupKey); } catch (e) { return null; }
+      },
+      markBackedUp() {
+        try { localStorage.setItem(this._backupKey, new Date().toISOString()); } catch (e) { /* best-effort */ }
+      },
+
+      _clock() {
+        return Object.assign(HJSyncCore.emptyClock(), HJStore.get('sync_clock') || {});
+      },
+      _saveClock(clock) {
+        HJStore.set('sync_clock', clock).catch((e) => console.error('Failed to save sync clock:', e));
+      },
+      _stamp() {
+        return { t: new Date().toISOString(), by: (this.getConfig() || {}).device || 'device' };
+      },
+      _same(a, b) {
+        return a === b || (a && b && typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
+      },
+
+      // The three record* methods diff one render's array against the last one
+      // instead of hooking every place that edits the library — App's persist
+      // effects already see every change, from whichever path made it.
+      recordSources(prev, next) {
+        if (prev === next || !this.isConfigured()) return;
+        const clock = this._clock();
+        const stamp = this._stamp();
+        const prevById = new Map(prev.map(s => [s.id, s]));
+        const nextById = new Map(next.map(s => [s.id, s]));
+        let changed = false;
+        prevById.forEach((p, id) => {
+          if (!nextById.has(id)) { clock.sourceTombstones[id] = stamp; changed = true; }
+        });
+        nextById.forEach((n, id) => {
+          const p = prevById.get(id);
+          if (!p) {
+            // Back from an undo: a newer "not deleted" outranks the tombstone.
+            if (clock.sourceTombstones[id]) {
+              delete clock.sourceTombstones[id];
+              clock.sources[id] = Object.assign({}, clock.sources[id], { deleted: stamp });
+              changed = true;
+            }
+            return;
+          }
+          if (p === n) return;
+          new Set(Object.keys(p).concat(Object.keys(n))).forEach(k => {
+            if (k === 'id' || k === 'content' || k === 'sentences' || this._same(p[k], n[k])) return;
+            clock.sources[id] = Object.assign({}, clock.sources[id], { [k]: stamp });
+            changed = true;
+          });
+        });
+        if (changed) this._saveClock(clock);
+      },
+
+      // `sources` is the same render's list: a note that vanished along with its
+      // source is covered by the source's tombstone and needs none of its own,
+      // so undeleting the source brings its notes back with it.
+      recordNotes(prev, next, sources) {
+        if (prev === next || !this.isConfigured()) return;
+        const clock = this._clock();
+        const stamp = this._stamp();
+        const prevById = new Map(prev.map(n => [n.id, n]));
+        const nextById = new Map(next.map(n => [n.id, n]));
+        let liveSources = null;
+        let changed = false;
+        prevById.forEach((p, id) => {
+          if (nextById.has(id)) return;
+          liveSources = liveSources || new Set(sources.map(s => s.id));
+          if (!liveSources.has(p.sourceId)) return;
+          clock.noteTombstones[id] = Object.assign({ sourceId: p.sourceId }, stamp);
+          delete clock.notes[id];
+          changed = true;
+        });
+        nextById.forEach((n, id) => {
+          const p = prevById.get(id);
+          if (!p) {
+            if (clock.noteTombstones[id]) {
+              delete clock.noteTombstones[id];
+              clock.notes[id] = stamp;
+              changed = true;
+            }
+            return;
+          }
+          if (p === n) return;
+          const differs = Object.keys(p).concat(Object.keys(n)).some(k => !this._same(p[k], n[k]));
+          if (differs) { clock.notes[id] = stamp; changed = true; }
+        });
+        if (changed) this._saveClock(clock);
+      },
+
+      recordFailedLinks(prev, next) {
+        if (prev === next || !this.isConfigured()) return;
+        const clock = this._clock();
+        const keyOf = (f) => normalizeUrlKey(f && f.url);
+        const prevKeys = new Set(prev.map(keyOf));
+        const nextKeys = new Set(next.map(keyOf));
+        const now = new Date().toISOString();
+        let changed = false;
+        prevKeys.forEach(k => { if (k && !nextKeys.has(k)) { clock.failedRemoved[k] = now; changed = true; } });
+        nextKeys.forEach(k => { if (k && clock.failedRemoved[k]) { delete clock.failedRemoved[k]; changed = true; } });
+        if (changed) this._saveClock(clock);
+      },
+    };
+
+    // Download the whole library as JSON — the Library's "Export All", and the
+    // backup Settings takes before sync is pointed at a repo. `tag` lands in the
+    // filename so a pre-sync backup can't be mistaken for a routine one.
+    const downloadLibraryBackup = ({ sources, notes, failedLinks }, tag = '') => {
+      // Include saved positions for articles/PDFs and media
+      const readerPositions = HJStore.get('positions') || {};
+      const mediaPositions = HJStore.get('media_positions') || {};
+
+      // Strip sentences arrays from sources to reduce export size
+      const cleanSources = sources.map(({ sentences, ...rest }) => rest);
+
+      const exportData = {
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        sources: cleanSources,
+        notes: notes,
+        failedLinks: failedLinks,
+        positions: {
+          reader: readerPositions,
+          media: mediaPositions
+        }
+      };
+
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const now = new Date();
+      const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      a.download = `harkenjot-library-${localDate}${tag ? '-' + tag : ''}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      HJSync.markBackedUp();
     };
 
     // Returns { usage, quota } in bytes via the Storage API. Falls back to a
@@ -4435,6 +5072,9 @@
       const mediaRef = useRef(null);
       const undoTimeoutRef = useRef(null);
       const storageWarningShownRef = useRef(false);
+      // The last persisted arrays, for HJSync to diff against (it records
+      // nothing until a sync repo is configured).
+      const syncPrevRef = useRef({ sources, notes, failedLinks });
 
       // Tab navigation with browser history support
       const changeTab = useCallback((tab) => {
@@ -4468,6 +5108,8 @@
 
       // Persist sources to IndexedDB and check usage against browser quota.
       useEffect(() => {
+        HJSync.recordSources(syncPrevRef.current.sources, sources);
+        syncPrevRef.current.sources = sources;
         HJStore.set('sources', sources).catch((e) => {
           console.error('Failed to save sources:', e);
           if (e && e.name === 'QuotaExceededError') showToast('Storage full — changes may not persist. Export your library and delete old sources to free space.');
@@ -4485,6 +5127,8 @@
       }, [sources]);
 
       useEffect(() => {
+        HJSync.recordNotes(syncPrevRef.current.notes, notes, sources);
+        syncPrevRef.current.notes = notes;
         HJStore.set('notes', notes).catch((e) => {
           console.error('Failed to save notes:', e);
           if (e && e.name === 'QuotaExceededError') showToast('Storage full — notes may not persist. Export your library and delete old sources to free space.');
@@ -4492,6 +5136,8 @@
       }, [notes]);
 
       useEffect(() => {
+        HJSync.recordFailedLinks(syncPrevRef.current.failedLinks, failedLinks);
+        syncPrevRef.current.failedLinks = failedLinks;
         HJStore.set('failed_links', failedLinks).catch((e) => console.error('Failed to save failed links:', e));
       }, [failedLinks]);
 
@@ -4902,6 +5548,7 @@
                 <div className="logo-tagline">Take Notes While You Listen</div>
               </div>
             </div>
+            <div className="header-right">
             <nav className="nav-tabs">
               <button
                 className={`nav-tab ${activeTab === 'reader' ? 'active' : ''}`}
@@ -4947,6 +5594,15 @@
                 )}
               </button>
             </nav>
+            <button
+              className={`settings-button ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => { changeTab('settings'); setCarMode(false); }}
+              title="Settings"
+              aria-label="Settings"
+            >
+              <Icons.Settings />
+            </button>
+            </div>
           </header>
 
           <main className="main-content">
@@ -5037,6 +5693,18 @@
                   activeTab={activeTab}
                 />
               </div>
+              {/* Mounted only while open: it hashes the library for its
+                  fingerprint, which nothing else needs. */}
+              {activeTab === 'settings' && (
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <SettingsView
+                    sources={sources}
+                    notes={notes}
+                    failedLinks={failedLinks}
+                    showToast={showToast}
+                  />
+                </div>
+              )}
             </div>
 
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
@@ -12822,6 +13490,213 @@
       );
     });
 
+    // "owner/name", or the repo's github.com URL as copied from the browser.
+    const parseRepoInput = (raw) => {
+      const m = /^(?:https?:\/\/)?(?:www\.)?(?:github\.com\/)?([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec((raw || '').trim());
+      return m ? { owner: m[1], repo: m[2] } : null;
+    };
+
+    // Settings — per-device: none of it is synced or exported.
+    function SettingsView({ sources, notes, failedLinks, showToast }) {
+      const [config, setConfig] = useState(() => HJSync.getConfig());
+      const [repoInput, setRepoInput] = useState(config ? `${config.owner}/${config.repo}` : '');
+      const [branch, setBranch] = useState(config?.branch || 'main');
+      const [device, setDevice] = useState(config?.device || (/android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent) ? 'phone' : 'desktop'));
+      const [tokenInput, setTokenInput] = useState('');
+      const [hasToken, setHasToken] = useState(() => HJSync.hasToken());
+      const [lastBackup, setLastBackup] = useState(() => HJSync.lastBackupAt());
+      const [fingerprint, setFingerprint] = useState('');
+
+      useEffect(() => {
+        let live = true;
+        // crypto.subtle only exists on https (or localhost); show a dash elsewhere.
+        HJSyncCore.fingerprint(sources, notes).then(f => { if (live) setFingerprint(f); }).catch(() => { if (live) setFingerprint('—'); });
+        return () => { live = false; };
+      }, [sources, notes]);
+
+      const backupNow = (tag) => {
+        downloadLibraryBackup({ sources, notes, failedLinks }, tag);
+        setLastBackup(HJSync.lastBackupAt());
+      };
+
+      const handleSave = () => {
+        const parsed = parseRepoInput(repoInput);
+        if (!parsed) { showToast('Repository should look like owner/name'); return; }
+        if (parsed.repo.toLowerCase() === 'harkenjot') {
+          showToast("That's the app's own public repo — use your private library repo");
+          return;
+        }
+        const token = tokenInput.trim();
+        // Only a fine-grained token can be limited to one repo; a classic one
+        // reaches every repo the account owns.
+        if (token && !token.startsWith('github_pat_')) {
+          showToast('Use a fine-grained token (it starts with github_pat_) limited to the library repo');
+          return;
+        }
+        const repoChanged = !config || config.owner !== parsed.owner || config.repo !== parsed.repo;
+        // Pointing sync at a repo is the moment to have a copy of the library
+        // that no sync code has touched.
+        if (repoChanged) backupNow('before-sync');
+        const next = {
+          mode: config?.mode || 'off',
+          owner: parsed.owner,
+          repo: parsed.repo,
+          branch: branch.trim() || 'main',
+          device: device.trim() || 'device',
+          deviceId: config?.deviceId || generateId(),
+        };
+        HJSync.saveConfig(next);
+        setConfig(next);
+        setRepoInput(`${next.owner}/${next.repo}`);
+        if (token) {
+          HJSync.setToken(token);
+          setTokenInput('');
+          setHasToken(true);
+        }
+        showToast(repoChanged ? 'Backup downloaded — sync settings saved' : 'Sync settings saved');
+      };
+
+      const handleDisconnect = () => {
+        if (!confirm('Disconnect sync on this device? This removes the repo and token from this browser. Your library here stays exactly as it is.')) return;
+        HJSync.saveConfig(null);
+        HJSync.clearToken();
+        setConfig(null);
+        setHasToken(false);
+        setTokenInput('');
+        showToast('Sync disconnected on this device');
+      };
+
+      const handleRemoveToken = () => {
+        HJSync.clearToken();
+        setHasToken(false);
+        showToast('Token removed from this browser');
+      };
+
+      const modes = [
+        { id: 'off', label: 'Off' },
+        { id: 'pull', label: 'Pull-only' },
+        { id: 'sync', label: 'Sync' },
+      ];
+      const mode = config?.mode || 'off';
+
+      return (
+        <div className="settings-view">
+          <section className="settings-card">
+            <h2>Library backup</h2>
+            <p className="settings-help">
+              Downloads the whole library as one JSON file — the same file as Library → Export All.
+            </p>
+            <div className="settings-actions">
+              <button className="btn btn-secondary" onClick={() => backupNow()}>
+                <Icons.FolderUp /> Back up now
+              </button>
+            </div>
+            <p className="settings-meta">
+              Last backup on this device: {lastBackup ? new Date(lastBackup).toLocaleString() : 'never'}
+            </p>
+            <p className="settings-meta">
+              This library: {sources.length} source{sources.length !== 1 ? 's' : ''} · {notes.length} note{notes.length !== 1 ? 's' : ''} · fingerprint <code>{fingerprint || '…'}</code>
+            </p>
+          </section>
+
+          <section className="settings-card">
+            <h2>GitHub sync</h2>
+            <p className="settings-help">
+              Keeps the library in a private GitHub repo shared by your devices. While it is off, nothing here touches the network.
+            </p>
+
+            <div className="settings-field">
+              <label>Mode</label>
+              <div className="settings-modes" role="group" aria-label="Sync mode">
+                {modes.map(m => (
+                  <button
+                    key={m.id}
+                    className={`settings-mode ${mode === m.id ? 'active' : ''}`}
+                    aria-pressed={mode === m.id}
+                    disabled={m.id !== 'off'}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <span className="settings-meta">Pull-only and Sync arrive in the next beta builds.</span>
+            </div>
+
+            <div className="settings-field">
+              <label htmlFor="sync-repo">Library repository</label>
+              <input
+                id="sync-repo"
+                className="url-input"
+                value={repoInput}
+                onChange={e => setRepoInput(e.target.value)}
+                placeholder="owner/harkenjot-library"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+
+            <div className="settings-field">
+              <label htmlFor="sync-branch">Branch</label>
+              <input
+                id="sync-branch"
+                className="url-input"
+                value={branch}
+                onChange={e => setBranch(e.target.value)}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+
+            <div className="settings-field">
+              <label htmlFor="sync-token">Access token</label>
+              <input
+                id="sync-token"
+                className="url-input"
+                type="password"
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value)}
+                placeholder={hasToken ? 'Saved — paste a new one to replace it' : 'github_pat_…'}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <span className="settings-meta">
+                A fine-grained token limited to the library repo. Kept only in this browser — never exported, synced or logged.
+              </span>
+            </div>
+
+            <div className="settings-field">
+              <label htmlFor="sync-device">This device's name</label>
+              <input
+                id="sync-device"
+                className="url-input"
+                value={device}
+                onChange={e => setDevice(e.target.value)}
+                placeholder="desktop"
+                autoCapitalize="off"
+                spellCheck={false}
+              />
+              <span className="settings-meta">Recorded beside each change, so the repo shows which device made it.</span>
+            </div>
+
+            <div className="settings-actions">
+              <button className="btn btn-primary" onClick={handleSave}>Save</button>
+              {hasToken && <button className="btn btn-secondary" onClick={handleRemoveToken}>Remove token</button>}
+              {config && <button className="btn btn-secondary" onClick={handleDisconnect}>Disconnect</button>}
+            </div>
+            {config && (
+              <p className="settings-meta">
+                Set up for <strong>{config.owner}/{config.repo}</strong> ({config.branch}) as “{config.device}”. Local changes are being recorded for sync; Import All is off while a repo is set.
+              </p>
+            )}
+          </section>
+        </div>
+      );
+    }
+
     // Library View Component
     function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, setSources, setNotes, showToast, activeTab }) {
       const [searchQuery, setSearchQuery] = React.useState('');
@@ -12950,36 +13825,7 @@
       };
 
       const exportLibrary = () => {
-        // Include saved positions for articles/PDFs and media
-        const readerPositions = HJStore.get('positions') || {};
-        const mediaPositions = HJStore.get('media_positions') || {};
-
-        // Strip sentences arrays from sources to reduce export size
-        const cleanSources = sources.map(({ sentences, ...rest }) => rest);
-
-        const exportData = {
-          version: 2,
-          exportedAt: new Date().toISOString(),
-          sources: cleanSources,
-          notes: notes,
-          failedLinks: failedLinks,
-          positions: {
-            reader: readerPositions,
-            media: mediaPositions
-          }
-        };
-
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const now = new Date();
-        const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        a.download = `harkenjot-library-${localDate}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        downloadLibraryBackup({ sources, notes, failedLinks });
         showToast('Library exported');
       };
 
@@ -13031,7 +13877,13 @@
                 const addedNotes = data.notes.length;
                 showToast(`Added ${addedSources} source${addedSources !== 1 ? 's' : ''} and ${addedNotes} note${addedNotes !== 1 ? 's' : ''} to library`);
               } else {
-                // Full library import (replaces everything)
+                // Full library import (replaces everything). Not while a sync
+                // repo is set: sync would read the swap as every current source
+                // and note being deleted, and push those deletions everywhere.
+                if (HJSync.isConfigured()) {
+                  alert('Import All is turned off while a sync repo is set up, because replacing the library would sync as deleting everything in it.\n\nSingle-source imports still work. To replace the whole library, disconnect the repo in Settings first.');
+                  return;
+                }
                 if (!confirm(`Import ${data.sources.length} sources and ${data.notes.length} notes? This will replace your current library.`)) {
                   return;
                 }
