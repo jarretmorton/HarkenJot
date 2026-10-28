@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~14,750 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
+HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~15,400 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
 
 ## Architecture
 
@@ -153,30 +153,31 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 140–191 | `webSpeechAPI` — Browser-native speech recognition module |
 | 193–351 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
 | 357 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
-| 358–2660 | `<style>` — All CSS, including CSS variables for theming |
-| 2667 | `#app-source` script block opens (all JSX below lives here) |
-| 2668 | React hooks imports |
-| 2671–2727 | `Icons` — SVG icon components |
-| 2728–3516 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `looksLikeUrl`/`extractUrlFromInput`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
-| 2964–3020 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
-| 3517–3740 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
-| 3608–3617 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 3743–4035 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
-| 4045–4387 | `HJSync` — per-device sync settings, the token, the local change recorder (`sync_clock`), and the GitHub client (`checkConnection`, `initialiseRepo`) |
-| 4388–4446 | `LIBRARY_REPO_README` — the library repo's README: the contract for agents |
-| 4447–4482 | `downloadLibraryBackup` — the library JSON export, shared by Library → Export All and Settings |
-| 4590–4969 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
-| 4970–5109 | `Toast` — Notification component with undo support |
-| 5110–5318 | `MediaSessionManager` — Browser Media Session API integration |
-| 5319–6027 | `App` — Root component, state management, tab routing, failed-link recording |
-| 6028–6126 | `EditableTitle` — Inline title editing component |
-| 6127–6635 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
-| 6636–10094 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
-| 10095–13793 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 13794–14070 | `SettingsView` — Library backup, GitHub sync settings, and the Repository card (Check connection / Initialise) |
-| 14071–14540 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
-| 14541–14745 | `NoteSidebar` — Notes display, editing, and navigation |
-| 14747 | `ReactDOM.createRoot` render call |
+| 358–2713 | `<style>` — All CSS, including CSS variables for theming |
+| 2720 | `#app-source` script block opens (all JSX below lives here) |
+| 2721 | React hooks imports |
+| 2724–2780 | `Icons` — SVG icon components |
+| 2781–3569 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `looksLikeUrl`/`extractUrlFromInput`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 3017–3073 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
+| 3570–3793 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 3661–3670 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 3796–4101 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
+| 4111–4462 | `HJSync` — per-device sync settings, the token, the local change recorder (`sync_clock`), and the GitHub client (`checkConnection`, `initialiseRepo`) |
+| 4463–4886 | `HJSync` pull — `pull` / `_pullOnce` / `_applyPulled`, the status and log, `patchSources` / `patchNotes` |
+| 4887–4945 | `LIBRARY_REPO_README` — the library repo's README: the contract for agents |
+| 4946–4981 | `downloadLibraryBackup` — the library JSON export, shared by Library → Export All and Settings |
+| 5089–5468 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
+| 5469–5608 | `Toast` — Notification component with undo support |
+| 5609–5817 | `MediaSessionManager` — Browser Media Session API integration |
+| 5818–6601 | `App` — Root component, state management, tab routing, failed-link recording, sync triggers (`applyPulled`, `runSync`) |
+| 6602–6700 | `EditableTitle` — Inline title editing component |
+| 6701–7209 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
+| 7210–10668 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
+| 10669–14367 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
+| 14368–14695 | `SettingsView` — Library backup, sync settings and mode, and the Repository card (Pull now / Check connection / Initialise, sync log) |
+| 14696–15165 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
+| 15166–15370 | `NoteSidebar` — Notes display, editing, and navigation |
+| 15372 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -241,11 +242,14 @@ the user actually used last.
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
 | `failed_links` | `harkenjot_failed_links` | Links that failed to load, newest first, capped at 50 — each with where it failed and the trace of the attempt |
 | `sync_clock` | `harkenjot_sync_clock` | GitHub sync's record of local changes — per-field and per-note timestamps, and tombstones for deletes. Absent until a sync repo is configured (see **GitHub sync**) |
-| `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo: branch, the last commit this device wrote or read, and the blob SHA of every file in it. Written by Initialise |
+| `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo as of the last pull or Initialise: repo, branch and commit; the repo's blob SHA per file (`shas`); this device's SHA per file then (`localShas`); the paths this device has that the repo doesn't (`pending`); the positions as last synced (`positions`) |
 
-Three keys live in `localStorage` only, never in `HJStore`, and are never exported:
-`harkenjot_sync_config` (this device's sync settings), `harkenjot_gh_token` (the GitHub token) and
-`harkenjot_last_backup` (when this device last downloaded a library backup).
+Four keys live in `localStorage` only, never in `HJStore`, and are never exported:
+
+- `harkenjot_sync_config` — this device's sync settings, including the mode;
+- `harkenjot_gh_token` — the GitHub token;
+- `harkenjot_last_backup` — when this device last downloaded a library backup;
+- `harkenjot_sync_log` — the last 20 sync events, shown in Settings.
 
 ### In-app volume
 
@@ -524,8 +528,10 @@ library).
 
 - **Phase 1 (v1.64.0)** shipped the Settings page, the file formats and merge rules, and the local
   change recorder.
-- **Phase 2 (v1.65.0)** added the GitHub client and the one-time **Initialise**. Pull-only and Sync
-  are still shown but disabled; GitHub is contacted only when a Settings button is pressed.
+- **Phase 2 (v1.65.0)** added the GitHub client and the one-time **Initialise**.
+- **Phase 3 (v1.66.0)** added **Pull-only** mode: the repo's changes come into this device, and
+  nothing goes back. Two-way Sync is still shown but disabled. With the mode Off, GitHub is contacted
+  only when a Settings button is pressed.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -605,6 +611,72 @@ library. `HJSync.initialiseRepo` works through these steps:
 5. **Check and record.** It reads the tree back, compares every path's blob SHA with the one computed
    locally, and saves the result as `sync_meta`.
 
+**A pull reads only what changed, then merges in one synchronous block.** `HJSync.pull` is
+single-flight and runs at four points:
+
+- shortly after the app opens, or when a page opened in the background is first shown;
+- on the `online` event;
+- when the app comes back to the foreground after five minutes away;
+- from Pull now in Settings.
+
+Each pull goes through these steps:
+
+1. **Check the repo.** It re-reads the repo every time, so a repo made public later stops the pull.
+2. **Stop early if nothing moved.** If the branch head equals `sync_meta.commit`, the pull costs two
+   requests and ends.
+3. **Pick the files to read.** It lists the tree and reads only synced paths whose blob SHA changed
+   since the last pull. A file this device already holds byte for byte is skipped (`gitBlobSha` of the
+   local serialization). `meta.json` and `text.txt` are never read for a source this device has live:
+   they are written once and this device's copy stands.
+4. **Read deleted sources lazily.** For a folder this device doesn't have live, it reads `state.json`
+   first, and the text and notes only if the merge leaves the source live. A deleted source's text is
+   never downloaded.
+5. **Merge and patch in one synchronous block** (`_applyPulled`, no `await`), so no local edit can land
+   between reading the library and patching it. The patch is a set of ops — field patches from
+   `state.json`, inserts, removals, note upserts and removals — that App applies with functional
+   updaters through the same pure `patchSources` / `patchNotes`. Each updater also moves
+   `syncPrevRef` past the change, so the recorder doesn't stamp the repo's edits as this device's own.
+
+Four rules a pull keeps:
+
+- **An existing source keeps its own meta;** only what `state.json` carries is patched in, compared
+  the way the app reads it (`getReadStatus`, null equal to missing). A source new to this device is
+  inserted whole, where its `createdAt` puts it.
+- **The open source is never replaced.** Its object is left alone because ReaderView resets on a new
+  `currentSource`. Its patched copy in `sources` shows the next time it is opened. Its position is not
+  overwritten either: if the repo's position won the merge, this device's position is kept and
+  re-stamped, so the device in use keeps its place. A remote delete of the open source shows a toast
+  and leaves it open until it is left.
+- **An unreadable file in the repo is never applied.** This device's copy stands and the file counts
+  as pending, so the next push replaces it.
+- **A newer `schemaVersion` stops the pull** before anything is read.
+
+**Positions are stamped by sync, not as they change,** because they are written every second. Any
+position that differs from `sync_meta.positions` (the value last synced) is stamped "now" when a sync
+notices it. A device's first pull takes today's positions as the baseline instead of stamping them all.
+
+**Pending is what this device has that the repo doesn't,** counted per source folder for the gear's
+amber dot. A file the pull merged is pending if the merge kept anything of this device's. That is
+judged against the repo's copy in canonical form, ignoring bare registers the repo simply doesn't
+spell out (an agent names only the fields it sets). Any other file is pending if it differs from the
+repo and either changed here since the last pull (`localShas`) or was already pending then. An empty
+`notes.json` the repo lacks is not pending. Phase 4 pushes exactly this set.
+
+**First pull on a device (the join)** is a plain merge by id. It reports the sources only this device
+has, and lists any that share a link with a repo source as possible duplicates. Nothing is merged by
+URL automatically.
+
+The gear shows the state as a dot while sync is on:
+
+- green — up to date;
+- amber — changes waiting here;
+- red — error;
+- grey — offline;
+- pulsing — pulling.
+
+The last 20 events are kept in `harkenjot_sync_log`. On desktop, sync being on also brings a toast
+when the last backup is more than a week old.
+
 **Every GitHub call goes through `HJSync._gh`.** It uses `fetchWithTimeout`, turns status codes into
 what they mean for the token holder (a fine-grained token answers 404 for a repo outside its scope),
 and records the token's expiry from `github-authentication-token-expiration` when the browser is
@@ -633,6 +705,12 @@ in-memory mock. The mock uses real git blob SHAs, flat trees, `base_tree` chaini
 ref updates. That covers the paths a real repo would otherwise be needed for: an empty repo, a public
 repo, the app's own repo, a second Initialise, a branch moving mid-upload, a revoked token and a
 missing repo.
+
+Pull is tested with two browser contexts (separate storage, like two devices) against the same mock,
+with a read-only token that the mock refuses on every write. It covers the join, remote edits
+(status, delete, note edit and delete, an agent-added source, `ai-notes.jsonl`), the open-source
+guard, a no-change pull (two requests), an unreadable file, a newer schema, offline then back online,
+pull on open, and no calls at all with the mode Off.
 
 ### A paste is not always a link
 
@@ -1053,20 +1131,20 @@ routine.
 ### Common Modification Areas
 
 - **UI/Theme**: CSS variables in `:root` (around line 360)
-- **Icons**: `Icons` object (line 2671)
-- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2728) plus `handleAskQuery` in both `ReaderView` and `MediaView`
-- **Persistence**: `HJStore` IndexedDB module (line 3517)
-- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 6636)
-- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 4590) plus the Strategy 0 block in `fetchArticleFromUrl`
-- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10095)
-- **Gemini Notebook linking**: `NotebookLMModal` (line 6127); URL validation via `NOTEBOOK_URL_RE` (line 3422)
-- **Library/export, Unloaded links panel**: `LibraryView` (line 14071); the export itself is `downloadLibraryBackup` (line 4447)
-- **Settings page**: `SettingsView` (line 13794)
-- **GitHub sync**: `HJSyncCore` formats and merges (line 3743), `HJSync` settings, change recorder and GitHub client (line 4045), the agent README `LIBRARY_REPO_README` (line 4388), the `HJSync.record*` calls in App's persist effects
+- **Icons**: `Icons` object (line 2724)
+- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2781) plus `handleAskQuery` in both `ReaderView` and `MediaView`
+- **Persistence**: `HJStore` IndexedDB module (line 3570)
+- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 7210)
+- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 5089) plus the Strategy 0 block in `fetchArticleFromUrl`
+- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10669)
+- **Gemini Notebook linking**: `NotebookLMModal` (line 6701); URL validation via `NOTEBOOK_URL_RE` (line 3475)
+- **Library/export, Unloaded links panel**: `LibraryView` (line 14696); the export itself is `downloadLibraryBackup` (line 4946)
+- **Settings page**: `SettingsView` (line 14368)
+- **GitHub sync**: `HJSyncCore` formats and merges (line 3796), `HJSync` settings, change recorder and GitHub client (line 4111), pull (line 4463), the agent README `LIBRARY_REPO_README` (line 4887), and in App the `HJSync.record*` calls in the persist effects plus `applyPulled` / `runSync`
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
-- **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2785) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
-- **Notes panel**: `NoteSidebar` (line 14541)
-- **App-level state/routing**: `App` (line 5319)
+- **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2838) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
+- **Notes panel**: `NoteSidebar` (line 15166)
+- **App-level state/routing**: `App` (line 5818)
 
 ### Version
 
