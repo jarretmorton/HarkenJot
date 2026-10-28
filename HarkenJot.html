@@ -2381,6 +2381,36 @@
       margin-top: 0.25rem;
     }
 
+    .settings-status {
+      font-size: 0.85rem;
+      line-height: 1.5;
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+    }
+
+    .settings-status.ok {
+      background: #eef5f0;
+      color: var(--success);
+    }
+
+    .settings-status.error {
+      background: var(--accent-soft);
+      color: var(--accent-hover);
+    }
+
+    .settings-status a {
+      color: inherit;
+      font-weight: 600;
+    }
+
+    .settings-actions .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .settings-meta code {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.75rem;
@@ -2695,7 +2725,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.64.0';
+    const APP_VERSION = '1.65.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3491,8 +3521,8 @@
       _dbName: 'harkenjot',
       _store: 'kv',
       _handleStore: 'audioHandles',
-      // sync_clock only ever holds anything once GitHub sync is configured (see HJSync).
-      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache', 'failed_links', 'sync_clock'],
+      // sync_clock and sync_meta only ever hold anything once GitHub sync is configured (see HJSync).
+      _keys: ['sources', 'notes', 'positions', 'media_positions', 'session', 'voice_uri', 'volume', 'net_hints', 'feed_cache', 'failed_links', 'sync_clock', 'sync_meta'],
       _lsKey: {
         sources: 'harkenjot_sources',
         notes: 'harkenjot_notes',
@@ -3505,6 +3535,7 @@
         feed_cache: 'harkenjot_feed_cache',
         failed_links: 'harkenjot_failed_links',
         sync_clock: 'harkenjot_sync_clock',
+        sync_meta: 'harkenjot_sync_meta',
       },
 
       _open() {
@@ -4145,7 +4176,270 @@
         nextKeys.forEach(k => { if (k && clock.failedRemoved[k]) { delete clock.failedRemoved[k]; changed = true; } });
         if (changed) this._saveClock(clock);
       },
+
+      // ── GitHub ──
+      //
+      // Every request below is started by a button in Settings; nothing here runs
+      // on its own. Calls go to api.github.com only (CORS-open with a token), and
+      // nothing that is logged or thrown ever carries the token or a header.
+
+      _token() {
+        try { return localStorage.getItem(this._tokenKey) || ''; } catch (e) { return ''; }
+      },
+      _repoPath() {
+        const c = this.getConfig();
+        return `/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}`;
+      },
+      _fail(message, status) {
+        const e = new Error(message);
+        e.userMessage = message;
+        e.status = status;
+        return e;
+      },
+      // What a failed call means for the person holding the token, rather than
+      // GitHub's own wording.
+      _explain(status, res, what) {
+        if (status === 401) return 'GitHub rejected the token — it may have expired or been revoked. Paste a new one.';
+        if (status === 403 && res.headers.get('x-ratelimit-remaining') === '0') return 'GitHub’s hourly request limit is used up — try again in an hour.';
+        if (status === 403) return `The token isn’t allowed to ${what}. It needs Contents: Read and write on this repo.`;
+        // A fine-grained token answers 404 for any repo outside its scope, so
+        // "not found" and "not granted" look identical from here.
+        if (status === 404) return 'Repo not found — check the name, and that the token was given access to this repo.';
+        return `GitHub answered ${status} while trying to ${what}.`;
+      },
+      async _gh(path, { method = 'GET', body, what = 'reach the repo', timeoutMs = 30000 } = {}) {
+        const token = this._token();
+        if (!token) throw this._fail('Add an access token first.');
+        let res;
+        try {
+          res = await fetchWithTimeout('https://api.github.com' + path, timeoutMs, {
+            method,
+            cache: 'no-store',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              ...(body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            body: body ? JSON.stringify(body) : undefined,
+          });
+        } catch (e) {
+          throw this._fail(e && e.name === 'AbortError' ? `GitHub didn’t answer in time while trying to ${what}.` : 'Couldn’t reach GitHub — check the connection.');
+        }
+        // Fine-grained tokens report their own expiry on every response, when the
+        // browser is allowed to see the header.
+        const exp = res.headers.get('github-authentication-token-expiration');
+        if (exp) this._noteTokenExpiry(exp);
+        if (!res.ok) throw this._fail(this._explain(res.status, res, what), res.status);
+        return res.status === 204 ? null : res.json();
+      },
+      _noteTokenExpiry(raw) {
+        const c = this.getConfig();
+        if (!c || c.tokenExpires === raw) return;
+        this.saveConfig({ ...c, tokenExpires: raw });
+      },
+
+      // The branch's head commit, or null when the repo has no commits at all.
+      async _headCommit(branch) {
+        try {
+          const ref = await this._gh(`${this._repoPath()}/git/ref/heads/${encodeURIComponent(branch)}`, { what: 'read the branch' });
+          return ref.object.sha;
+        } catch (e) {
+          if (e.status === 409) return null; // "Git Repository is empty."
+          if (e.status === 404) throw this._fail(`There is no branch "${branch}" in this repo.`, 404);
+          throw e;
+        }
+      },
+
+      async _readRepo() {
+        const repo = await this._gh(this._repoPath(), { what: 'open the repo' });
+        // Refused before anything is read or written: the library is personal,
+        // and a public repo would publish every note in it.
+        if (repo.private !== true) throw this._fail(`${repo.full_name} is public. The library only ever goes into a private repo.`);
+        return repo;
+      },
+
+      async _treeAt(commitSha) {
+        const commit = await this._gh(`${this._repoPath()}/git/commits/${commitSha}`, { what: 'read the latest commit' });
+        const tree = await this._gh(`${this._repoPath()}/git/trees/${commit.tree.sha}?recursive=1`, { what: 'list the repo’s files' });
+        return { treeSha: commit.tree.sha, entries: tree.tree || [], truncated: !!tree.truncated };
+      },
+
+      // Read-only: is the repo reachable, private, and already a library?
+      async checkConnection() {
+        const cfg = this.getConfig();
+        const repo = await this._readRepo();
+        const head = await this._headCommit(cfg.branch || 'main');
+        if (!head) return { repo: repo.full_name, initialised: false, empty: true };
+        const { entries } = await this._treeAt(head);
+        const initialised = entries.some(e => e.path === 'harkenjot.json');
+        const sources = new Set(entries.filter(e => e.path.startsWith('sources/')).map(e => e.path.split('/')[1])).size;
+        return { repo: repo.full_name, initialised, sources };
+      },
+
+      // One-time migration: write this device's whole library into a repo that
+      // has never held one, as a single commit. Refuses anything that already
+      // looks like a library (or like the app's own repo), so it can never
+      // overwrite one. `onProgress(text)` narrates for the Settings page.
+      async initialiseRepo(library, onProgress = () => {}) {
+        if (!this.isConfigured()) throw this._fail('Save a repo first.');
+        const cfg = this.getConfig();
+        const branch = cfg.branch || 'main';
+        const repoPath = this._repoPath();
+
+        onProgress('Checking the repo…');
+        const repo = await this._readRepo();
+        let head = await this._headCommit(branch);
+        if (!head) {
+          // The Git Data API can't build on a repo with no commits, so seed one
+          // README through the contents API, which can.
+          if (branch !== repo.default_branch) throw this._fail(`This repo is empty, so it can only start on its default branch "${repo.default_branch}". Set that as the branch and try again.`);
+          onProgress('Starting the empty repo…');
+          await this._gh(`${repoPath}/contents/README.md`, {
+            method: 'PUT',
+            what: 'write to the repo',
+            body: { message: 'Start HarkenJot library', content: btoa(unescape(encodeURIComponent(LIBRARY_REPO_README))) },
+          });
+          head = await this._headCommit(branch);
+        }
+        const before = await this._treeAt(head);
+        const paths = new Set(before.entries.map(e => e.path));
+        if (paths.has('HarkenJot.html')) throw this._fail('This looks like the HarkenJot app’s own repo, not a library repo.');
+        if (paths.has('harkenjot.json') || before.entries.some(e => e.path.startsWith('sources/'))) {
+          throw this._fail('This repo already holds a HarkenJot library. Initialise only ever fills an empty one, so nothing was changed.');
+        }
+
+        onProgress('Preparing files…');
+        const files = HJSyncCore.libraryToFiles(library, this._clock());
+        files['README.md'] = LIBRARY_REPO_README;
+        const names = Object.keys(files).sort();
+        const shas = {};
+        for (const p of names) shas[p] = await HJSyncCore.gitBlobSha(files[p]);
+
+        // Inline file content in POST /git/trees creates the blobs in the same
+        // request, so a 12 MB library is a handful of calls, not one per file.
+        // Parts are kept to ~1 MB, and any single file over that goes up as
+        // its own blob first.
+        const enc = new TextEncoder();
+        const parts = [];
+        let part = [], size = 0;
+        for (const p of names) {
+          const n = enc.encode(files[p]).length;
+          if (part.length && (size + n > 1000000 || part.length >= 400)) { parts.push(part); part = []; size = 0; }
+          part.push(p);
+          size += n;
+        }
+        if (part.length) parts.push(part);
+
+        let tree = before.treeSha;
+        for (let i = 0; i < parts.length; i++) {
+          onProgress(`Uploading part ${i + 1} of ${parts.length}…`);
+          const entries = [];
+          for (const p of parts[i]) {
+            if (enc.encode(files[p]).length > 1000000) {
+              const blob = await this._gh(`${repoPath}/git/blobs`, { method: 'POST', what: 'write to the repo', timeoutMs: 120000, body: { content: files[p], encoding: 'utf-8' } });
+              entries.push({ path: p, mode: '100644', type: 'blob', sha: blob.sha });
+            } else {
+              entries.push({ path: p, mode: '100644', type: 'blob', content: files[p] });
+            }
+          }
+          const t = await this._gh(`${repoPath}/git/trees`, { method: 'POST', what: 'write to the repo', timeoutMs: 120000, body: { base_tree: tree, tree: entries } });
+          tree = t.sha;
+        }
+
+        onProgress('Committing…');
+        const sourceCount = library.sources.length, noteCount = library.notes.length;
+        const commit = await this._gh(`${repoPath}/git/commits`, {
+          method: 'POST',
+          what: 'write to the repo',
+          body: { message: `Initialise HarkenJot library from ${cfg.device || 'device'} (${sourceCount} sources, ${noteCount} notes)`, tree, parents: [head] },
+        });
+        try {
+          // force:false — if anything else moved the branch meanwhile, GitHub
+          // refuses rather than this commit replacing it.
+          await this._gh(`${repoPath}/git/refs/heads/${encodeURIComponent(branch)}`, { method: 'PATCH', what: 'update the branch', body: { sha: commit.sha, force: false } });
+        } catch (e) {
+          if (e.status === 422) throw this._fail('The repo changed while this was running, so the library was not added and nothing in it was replaced. Run Initialise again.', 422);
+          throw e;
+        }
+
+        // Read back what landed and compare every file with what was sent.
+        onProgress('Checking what landed…');
+        const after = await this._treeAt(commit.sha);
+        const landed = {};
+        after.entries.forEach(e => { if (e.type === 'blob') landed[e.path] = e.sha; });
+        const mismatched = names.filter(p => landed[p] !== shas[p]);
+
+        HJStore.set('sync_meta', { branch, commit: commit.sha, shas, initialisedAt: new Date().toISOString() })
+          .catch((e) => console.error('Failed to save sync state:', e));
+        return {
+          files: names.length,
+          sources: sourceCount,
+          notes: noteCount,
+          mismatched,
+          truncated: after.truncated,
+          commitUrl: `https://github.com/${cfg.owner}/${cfg.repo}/commit/${commit.sha}`,
+        };
+      },
     };
+
+    // The library repo's README: the contract for any agent that reads or
+    // writes the repo. Written by Initialise; the app never merges it after.
+    const LIBRARY_REPO_README = `# HarkenJot library
+
+This private repo holds a HarkenJot library: sources, the notes taken on them, and reading state.
+The HarkenJot app syncs it between devices. Agents may read everything and extend it by following
+the rules below. Format version: \`harkenjot.json\` → \`schemaVersion\` (currently 1).
+
+## Layout
+
+\`\`\`
+harkenjot.json               {"app": "HarkenJot", "schemaVersion": 1}
+failed-links.json            links that failed to load in the app
+sources/<id>/meta.json       the source as first saved (type, title, url, createdAt, …). Written once.
+sources/<id>/text.txt        the source's text (articles, PDFs, pasted text). Written once.
+sources/<id>/notes.json      the owner's notes. Written by HarkenJot only.
+sources/<id>/state.json      status, position, speed, title, copiedAt, deleted, …
+sources/<id>/ai-notes.jsonl  notes written by agents, one JSON object per line
+\`\`\`
+
+## state.json
+
+Every field is a register: \`{"value": …, "updatedAt": "<ISO 8601 UTC>", "by": "<who>"}\`. A field
+with no \`updatedAt\` has not changed since the library was first written. When two copies disagree,
+the later \`updatedAt\` wins, field by field.
+
+- \`status\` — \`not-started\`, \`in-progress\` or \`complete\`.
+- \`position\` — \`{"unit": "sentence", "at": 12}\` for text, \`{"unit": "seconds", "at": 754.2}\` for media.
+- \`deleted\` — \`true\` means the owner deleted the source. Skip it. Its folder stays in the repo.
+- \`copiedAt\` — when the source was copied to the weekly tracker. Once set it is never cleared.
+
+## Rules for agents
+
+1. **Never write \`notes.json\`.** Those are the owner's notes. Write to \`ai-notes.jsonl\` instead.
+2. **Never delete or rename a file or folder.** Deleting is done by setting \`deleted\`.
+3. **Change only the state fields you own,** and stamp each one you change with \`updatedAt\` (now,
+   UTC) and \`by\` (your agent's name). Leave every other field exactly as you found it.
+4. **Write with the file's \`sha\`.** Use \`PUT /repos/{owner}/{repo}/contents/{path}\` with the \`sha\`
+   you just read. On a 409 or 422, read the file again, re-apply your change and retry.
+5. **Append to \`ai-notes.jsonl\`; never rewrite lines.** One object per line:
+   \`{"id": "<unique>", "by": "<agent>", "createdAt": "<ISO UTC>", "text": "…"}\`.
+
+## Adding a source
+
+Pick a new folder id matching \`[a-z0-9-]{6,40}\` that isn't already used — for example
+\`<agent>-<yyyymmdd>-<random>\`. Then write:
+
+- \`meta.json\` — at least \`{"type": "article", "title": "…", "url": "https://…", "createdAt": "<ISO UTC>", "addedBy": "<agent>"}\`.
+  \`type\` is one of \`article\`, \`text\`, \`pdf\`, \`youtube\`, \`podcast\`, \`xvideo\`.
+- \`text.txt\` — the readable text, for \`article\`, \`text\` and \`pdf\`.
+- \`state.json\` — \`{"schema": 1, "status": {"value": "not-started", "updatedAt": "<ISO UTC>", "by": "<agent>"}}\`.
+
+## Finding sources to copy to the weekly tracker
+
+Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`copiedAt.value\`, and
+\`deleted.value\` not \`true\`. After copying one, set \`copiedAt\` as in rule 3.
+`;
 
     // Download the whole library as JSON — the Library's "Export All", and the
     // backup Settings takes before sync is pointed at a repo. `tag` lands in the
@@ -13506,6 +13800,9 @@
       const [hasToken, setHasToken] = useState(() => HJSync.hasToken());
       const [lastBackup, setLastBackup] = useState(() => HJSync.lastBackupAt());
       const [fingerprint, setFingerprint] = useState('');
+      // A GitHub action in flight: { label } while running, then { ok, message, link? }.
+      const [busy, setBusy] = useState(null);
+      const [result, setResult] = useState(null);
 
       useEffect(() => {
         let live = true;
@@ -13572,6 +13869,53 @@
         showToast('Token removed from this browser');
       };
 
+      // Runs one GitHub action with the buttons locked and its progress shown.
+      const runGitHub = async (label, fn) => {
+        setResult(null);
+        setBusy({ label });
+        try {
+          setResult(await fn((text) => setBusy({ label: text })));
+        } catch (e) {
+          setResult({ ok: false, message: e.userMessage || 'Something went wrong talking to GitHub.' });
+          if (!e.userMessage) console.error('GitHub sync action failed:', e);
+        } finally {
+          setBusy(null);
+          setConfig(HJSync.getConfig()); // may have learned the token's expiry
+        }
+      };
+
+      const handleCheck = () => runGitHub('Checking…', async () => {
+        const r = await HJSync.checkConnection();
+        return {
+          ok: true,
+          message: r.initialised
+            ? `Connected to ${r.repo} (private). It holds a library of ${r.sources} source${r.sources !== 1 ? 's' : ''}.`
+            : `Connected to ${r.repo} (private). It is ready for Initialise${r.empty ? ' — no commits yet' : ''}.`,
+        };
+      });
+
+      const handleInitialise = () => {
+        if (!confirm(`Write this library — ${sources.length} sources and ${notes.length} notes — into ${config.owner}/${config.repo}?\n\nIt goes in as one commit and only into a repo that has never held a library. A backup downloads first.`)) return;
+        backupNow('before-init');
+        runGitHub('Starting…', async (progress) => {
+          const library = {
+            sources,
+            notes,
+            failedLinks,
+            positions: { reader: HJStore.get('positions') || {}, media: HJStore.get('media_positions') || {} },
+          };
+          const r = await HJSync.initialiseRepo(library, progress);
+          if (r.mismatched.length) {
+            return { ok: false, link: r.commitUrl, message: `Written, but ${r.mismatched.length} of ${r.files} files didn't read back as sent (first: ${r.mismatched[0]}). Don't turn sync on yet — report this.` };
+          }
+          return {
+            ok: true,
+            link: r.commitUrl,
+            message: `Initialised: ${r.sources} sources and ${r.notes} notes as ${r.files} files, each checked after upload${r.truncated ? ' (GitHub listed only part of the tree, so the check was partial)' : ''}.`,
+          };
+        });
+      };
+
       const modes = [
         { id: 'off', label: 'Off' },
         { id: 'pull', label: 'Pull-only' },
@@ -13602,7 +13946,7 @@
           <section className="settings-card">
             <h2>GitHub sync</h2>
             <p className="settings-help">
-              Keeps the library in a private GitHub repo shared by your devices. While it is off, nothing here touches the network.
+              Keeps the library in a private GitHub repo shared by your devices. With Mode off, GitHub is only contacted when you press one of the buttons below.
             </p>
 
             <div className="settings-field">
@@ -13690,9 +14034,35 @@
             {config && (
               <p className="settings-meta">
                 Set up for <strong>{config.owner}/{config.repo}</strong> ({config.branch}) as “{config.device}”. Local changes are being recorded for sync; Import All is off while a repo is set.
+                {config.tokenExpires && <> Token expires {(() => {
+                  // GitHub writes "2026-11-27 12:00:00 UTC", which not every browser's Date parses.
+                  const d = new Date(config.tokenExpires.replace(' UTC', 'Z').replace(' ', 'T'));
+                  return isNaN(d) ? config.tokenExpires : d.toLocaleDateString();
+                })()}.</>}
               </p>
             )}
           </section>
+
+          {config && (
+            <section className="settings-card">
+              <h2>Repository</h2>
+              <p className="settings-help">
+                Check connection only reads. Initialise is the one-time move of this device's library into the repo — run it once, from the device whose library is most complete, into a repo that has never held one.
+              </p>
+              <div className="settings-actions">
+                <button className="btn btn-secondary" onClick={handleCheck} disabled={!!busy || !hasToken}>Check connection</button>
+                <button className="btn btn-primary" onClick={handleInitialise} disabled={!!busy || !hasToken}>Initialise repo from this library</button>
+              </div>
+              {!hasToken && <p className="settings-meta">Add an access token above first.</p>}
+              {busy && <p className="settings-status">{busy.label}</p>}
+              {result && (
+                <p className={`settings-status ${result.ok ? 'ok' : 'error'}`}>
+                  {result.message}
+                  {result.link && <> <a href={result.link} target="_blank" rel="noopener noreferrer">View the commit</a></>}
+                </p>
+              )}
+            </section>
+          )}
         </div>
       );
     }

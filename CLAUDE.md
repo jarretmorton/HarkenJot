@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~14,400 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
+HarkenJot is a **single-file web application** for taking notes while consuming audio, video, and text content. The entire application lives in `HarkenJot.html` (~14,750 lines). There is no build system, no package manager, and no backend server. This app is currently only for personal use.
 
 ## Architecture
 
@@ -153,29 +153,30 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 140–191 | `webSpeechAPI` — Browser-native speech recognition module |
 | 193–351 | `whisperASR` — Offline Whisper AI fallback (Transformers.js, loaded via dynamic `import()`) |
 | 357 | Google Fonts `<link>` (Crimson Pro, DM Sans, JetBrains Mono) |
-| 358–2630 | `<style>` — All CSS, including CSS variables for theming |
-| 2637 | `#app-source` script block opens (all JSX below lives here) |
-| 2638 | React hooks imports |
-| 2641–2697 | `Icons` — SVG icon components |
-| 2698–3486 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `looksLikeUrl`/`extractUrlFromInput`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
-| 2934–2990 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
-| 3487–3710 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
-| 3577–3586 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 3712–4012 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
-| 4014–4152 | `HJSync` — per-device sync settings, the token, and the local change recorder (`sync_clock`) |
-| 4153–4190 | `downloadLibraryBackup` — the library JSON export, shared by Library → Export All and Settings |
-| 4296–4675 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
-| 4676–4815 | `Toast` — Notification component with undo support |
-| 4816–5024 | `MediaSessionManager` — Browser Media Session API integration |
-| 5025–5733 | `App` — Root component, state management, tab routing, failed-link recording |
-| 5734–5832 | `EditableTitle` — Inline title editing component |
-| 5833–6341 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
-| 6342–9800 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
-| 9801–13499 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 13500–13700 | `SettingsView` — Library backup and GitHub sync settings (the gear button in the header) |
-| 13701–14170 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
-| 14171–14375 | `NoteSidebar` — Notes display, editing, and navigation |
-| 14377 | `ReactDOM.createRoot` render call |
+| 358–2660 | `<style>` — All CSS, including CSS variables for theming |
+| 2667 | `#app-source` script block opens (all JSX below lives here) |
+| 2668 | React hooks imports |
+| 2671–2727 | `Icons` — SVG icon components |
+| 2728–3516 | Utility functions (`APP_VERSION`, `generateId`, `safeHostname`, `stripUrlFragment`, `looksLikeUrl`/`extractUrlFromInput`, `normalizeUrlKey`, `formatFailedLinkReport`, `formatTime`, the "explain" lookup helpers `detectAskTrigger`/`lookupTerm`/`speakText`, `fetchWithTimeout`/`raceStaggered`/`netHints`, `linkTrace`, the `NOTEBOOK_*` constants + `isNotebookSource`, `scoreSourceMatch` filename↔title matching, etc.) |
+| 2964–3020 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
+| 3517–3740 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
+| 3608–3617 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
+| 3743–4035 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
+| 4045–4387 | `HJSync` — per-device sync settings, the token, the local change recorder (`sync_clock`), and the GitHub client (`checkConnection`, `initialiseRepo`) |
+| 4388–4446 | `LIBRARY_REPO_README` — the library repo's README: the contract for agents |
+| 4447–4482 | `downloadLibraryBackup` — the library JSON export, shared by Library → Export All and Settings |
+| 4590–4969 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
+| 4970–5109 | `Toast` — Notification component with undo support |
+| 5110–5318 | `MediaSessionManager` — Browser Media Session API integration |
+| 5319–6027 | `App` — Root component, state management, tab routing, failed-link recording |
+| 6028–6126 | `EditableTitle` — Inline title editing component |
+| 6127–6635 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
+| 6636–10094 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
+| 10095–13793 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
+| 13794–14070 | `SettingsView` — Library backup, GitHub sync settings, and the Repository card (Check connection / Initialise) |
+| 14071–14540 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
+| 14541–14745 | `NoteSidebar` — Notes display, editing, and navigation |
+| 14747 | `ReactDOM.createRoot` render call |
 
 ### Component Hierarchy
 
@@ -240,6 +241,7 @@ the user actually used last.
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
 | `failed_links` | `harkenjot_failed_links` | Links that failed to load, newest first, capped at 50 — each with where it failed and the trace of the attempt |
 | `sync_clock` | `harkenjot_sync_clock` | GitHub sync's record of local changes — per-field and per-note timestamps, and tombstones for deletes. Absent until a sync repo is configured (see **GitHub sync**) |
+| `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo: branch, the last commit this device wrote or read, and the blob SHA of every file in it. Written by Initialise |
 
 Three keys live in `localStorage` only, never in `HJStore`, and are never exported:
 `harkenjot_sync_config` (this device's sync settings), `harkenjot_gh_token` (the GitHub token) and
@@ -518,8 +520,12 @@ resolution takes and every failure reports against the URL that was actually typ
 Optional sync of the library through a **private** GitHub repo, so phone and desktop share one
 library and agents can read and extend it. It is being built in phases on a beta deployment
 (Netlify, a different origin from GitHub Pages, so its IndexedDB is separate from the real
-library). **Phase 1 (v1.64.0)** shipped the Settings page, the file formats and merge rules, and
-the local change recorder. There is no network code yet: Pull-only and Sync are shown but disabled.
+library).
+
+- **Phase 1 (v1.64.0)** shipped the Settings page, the file formats and merge rules, and the local
+  change recorder.
+- **Phase 2 (v1.65.0)** added the GitHub client and the one-time **Initialise**. Pull-only and Sync
+  are still shown but disabled; GitHub is contacted only when a Settings button is pressed.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -582,6 +588,33 @@ Three rules the recorder follows:
 - **Settings refuses the public app repo (`HarkenJot`) and any token that isn't fine-grained**
   (`github_pat_`). A classic token reaches every repo the account owns.
 
+**Initialise is the one-time migration**, and it only ever fills a repo that has never held a
+library. `HJSync.initialiseRepo` works through these steps:
+
+1. **Refuse unsafe targets.** It stops before reading further if the repo isn't private, holds
+   `HarkenJot.html` (the app's own repo), or already has `harkenjot.json` or a `sources/` folder.
+2. **Seed an empty repo.** A repo with no commits gets one README through the contents API, because
+   the Git Data API can't build on an empty repo.
+3. **Build and upload the files.** It writes every file `libraryToFiles` produces, plus the README.
+   Uploads go as inline `content` in `POST /git/trees`, chained through `base_tree` in ~1 MB parts; a
+   single file over 1 MB goes up first as its own blob. A 12 MB library is therefore about a dozen
+   requests, not one per file.
+4. **Commit once, without forcing.** The result is one commit, and the branch moves with
+   `PATCH …/refs` at `force: false`. If anything else moved the branch meanwhile, GitHub answers 422
+   and the library is not added.
+5. **Check and record.** It reads the tree back, compares every path's blob SHA with the one computed
+   locally, and saves the result as `sync_meta`.
+
+**Every GitHub call goes through `HJSync._gh`.** It uses `fetchWithTimeout`, turns status codes into
+what they mean for the token holder (a fine-grained token answers 404 for a repo outside its scope),
+and records the token's expiry from `github-authentication-token-expiration` when the browser is
+allowed to read that header. Thrown errors carry a `userMessage` and never a header or the token.
+
+**The repo's README is the agent contract** (`LIBRARY_REPO_README`). It covers the layout, the register
+format, how to add a source and set `copiedAt`, and the rules: never write `notes.json`, never delete
+files, and write with the file's `sha` and retry on conflict. Initialise writes it once; the app never
+merges it afterwards.
+
 **The token** lives in `localStorage` under `harkenjot_gh_token` only. It is never in `HJStore`, an
 export, a URL or a log line. Pointing Settings at a new repo downloads a `-before-sync` backup first.
 
@@ -594,6 +627,12 @@ export, a URL or a log line. Pointing Settings at a new repo downloads a `-befor
 - the merge laws hold on randomised documents.
 
 Keep the core free of DOM, storage and network calls so this keeps working.
+
+The GitHub client is tested the same way in Chromium, with Playwright routing `api.github.com` to an
+in-memory mock. The mock uses real git blob SHAs, flat trees, `base_tree` chaining and fast-forward-only
+ref updates. That covers the paths a real repo would otherwise be needed for: an empty repo, a public
+repo, the app's own repo, a second Initialise, a branch moving mid-upload, a revoked token and a
+missing repo.
 
 ### A paste is not always a link
 
@@ -1014,20 +1053,20 @@ routine.
 ### Common Modification Areas
 
 - **UI/Theme**: CSS variables in `:root` (around line 360)
-- **Icons**: `Icons` object (line 2641)
-- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2698) plus `handleAskQuery` in both `ReaderView` and `MediaView`
-- **Persistence**: `HJStore` IndexedDB module (line 3487)
-- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 6342)
-- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 4296) plus the Strategy 0 block in `fetchArticleFromUrl`
-- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 9801)
-- **Gemini Notebook linking**: `NotebookLMModal` (line 5833); URL validation via `NOTEBOOK_URL_RE` (line 3392)
-- **Library/export, Unloaded links panel**: `LibraryView` (line 13701); the export itself is `downloadLibraryBackup` (line 4153)
-- **Settings page**: `SettingsView` (line 13500)
-- **GitHub sync**: `HJSyncCore` formats and merges (line 3712), `HJSync` settings and change recorder (line 4014), the `HJSync.record*` calls in App's persist effects
+- **Icons**: `Icons` object (line 2671)
+- **"explain" lookup**: `detectAskTrigger`/`lookupTerm` utilities (line 2728) plus `handleAskQuery` in both `ReaderView` and `MediaView`
+- **Persistence**: `HJStore` IndexedDB module (line 3517)
+- **Reader functionality (incl. X.com posts/Articles)**: `ReaderView` (line 6636)
+- **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 4590) plus the Strategy 0 block in `fetchArticleFromUrl`
+- **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10095)
+- **Gemini Notebook linking**: `NotebookLMModal` (line 6127); URL validation via `NOTEBOOK_URL_RE` (line 3422)
+- **Library/export, Unloaded links panel**: `LibraryView` (line 14071); the export itself is `downloadLibraryBackup` (line 4447)
+- **Settings page**: `SettingsView` (line 13794)
+- **GitHub sync**: `HJSyncCore` formats and merges (line 3743), `HJSync` settings, change recorder and GitHub client (line 4045), the agent README `LIBRARY_REPO_README` (line 4388), the `HJSync.record*` calls in App's persist effects
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
-- **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2755) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
-- **Notes panel**: `NoteSidebar` (line 14171)
-- **App-level state/routing**: `App` (line 5025)
+- **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2785) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
+- **Notes panel**: `NoteSidebar` (line 14541)
+- **App-level state/routing**: `App` (line 5319)
 
 ### Version
 
