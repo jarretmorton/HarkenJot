@@ -2375,6 +2375,12 @@
       margin-bottom: 0.5rem;
     }
 
+    /* Tighter than the app-wide .btn so Save / Remove token / Disconnect share one line on a phone. */
+    .settings-actions .btn {
+      padding: 0.55rem 0.75rem;
+      white-space: nowrap;
+    }
+
     .settings-meta {
       font-size: 0.75rem;
       line-height: 1.5;
@@ -2783,7 +2789,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.68.2';
+    const APP_VERSION = '1.68.3';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
