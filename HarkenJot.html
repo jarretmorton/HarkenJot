@@ -2789,7 +2789,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.68.3';
+    const APP_VERSION = '1.69.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4913,11 +4913,18 @@
           const local0 = getLocal();
           const localFiles0 = this._localFiles(local0, this._clock());
           const live = new Set(local0.sources.map(s => s.id));
+          // A source this device holds without its text — an agent added it as
+          // a link, or its text.txt landed in a later commit than its meta — has
+          // no copy of text.txt to stand by, so the repo's is read whenever it
+          // has one, changed since the last pull or not.
+          const textless = new Set(local0.sources.filter(s => typeof s.content !== 'string' || !s.content).map(s => s.id));
           const need = [];
           for (const p of Object.keys(remote)) {
-            if (!HJSyncCore.isSyncedPath(p) || p === 'harkenjot.json' || remote[p] === known[p]) continue;
+            if (!HJSyncCore.isSyncedPath(p) || p === 'harkenjot.json') continue;
             const id = HJSyncCore.folderOf(p);
-            if (id && live.has(id) && this._writeOnce(p)) continue; // written once; this device's copy stands
+            const fillText = !!id && textless.has(id) && p.endsWith('/text.txt');
+            if (remote[p] === known[p] && !fillText) continue;
+            if (id && live.has(id) && this._writeOnce(p) && !fillText) continue; // written once; this device's copy stands
             if (localFiles0[p] !== undefined && await HJSyncCore.gitBlobSha(localFiles0[p]) === remote[p]) continue;
             need.push(p);
             if (id) folders.add(id); else rootChanged = true;
@@ -5114,6 +5121,9 @@
                 : this._same(cur[k] == null ? null : cur[k], st.fields[k] == null ? null : st.fields[k]);
               const fields = {};
               Object.keys(st.fields).forEach(k => { if (!unchanged(k)) fields[k] = st.fields[k]; });
+              // The one write-once file a source this device has can still take:
+              // text it never had. Text it does have stands, as meta.json does.
+              if ((typeof cur.content !== 'string' || !cur.content) && typeof src.content === 'string' && src.content) fields.content = src.content;
               if (Object.keys(fields).length) { ops.patch[id] = fields; counts.sources++; }
             } else if (!SOURCE_TYPES.has(src.type) || typeof src.title !== 'string' || !src.title.trim()) {
               // Without a type the app can't tell which view opens it.
@@ -5240,8 +5250,14 @@ Pick a new folder id matching \`[a-z0-9-]{6,40}\` that isn't already used — fo
 
 - \`meta.json\` — at least \`{"type": "article", "title": "…", "url": "https://…", "createdAt": "<ISO UTC>", "addedBy": "<agent>"}\`.
   \`type\` is one of \`article\`, \`text\`, \`pdf\`, \`youtube\`, \`podcast\`, \`xvideo\`.
-- \`text.txt\` — the readable text, for \`article\`, \`text\` and \`pdf\`.
+- \`text.txt\` — the readable text. Optional for an \`article\` or \`pdf\` with a \`url\`: leave it out and the
+  app fetches the text itself the first time the source is opened, then syncs it back here. Required
+  for \`text\`, which has no link to fetch from.
 - \`state.json\` — \`{"schema": 1, "status": {"value": "not-started", "updatedAt": "<ISO UTC>", "by": "<agent>"}}\`.
+
+Write a new source's files in **one commit** (the Git Data API, or a tool that pushes several files
+at once). If they must go one file per commit, write \`meta.json\` last: the app ignores a folder
+until its \`meta.json\` exists.
 
 ## Finding sources to copy to the weekly tracker
 
@@ -6550,6 +6566,15 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         setCurrentSource(prev => prev?.id === sourceId ? { ...prev, ...updates } : prev);
       };
 
+      // The reader fetched the text of a source that arrived as a link alone (an
+      // agent added it through the sync repo). Only the text is taken: the
+      // source's own title and type stand, as its meta.json does.
+      const fillSourceText = (sourceId, loaded) => {
+        updateSource(sourceId, { content: loaded.content });
+        if (loaded.url) dropFailedLink(loaded.url);
+        showToast('Article text loaded');
+      };
+
       const addNote = (note) => {
         const newNote = { ...note, id: generateId(), createdAt: new Date().toISOString() };
         setNotes(prev => {
@@ -6813,6 +6838,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   currentSource={currentSource}
                   setCurrentSource={setCurrentSource}
                   addSource={addSource}
+                  fillSourceText={fillSourceText}
                   updateSource={updateSource}
                   addNote={addNote}
                   notes={currentNotes}
@@ -7540,7 +7566,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     };
 
     // Reader View Component
-    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, setSelectedVoiceURI, volume, setVolume }, ref) => {
+    const ReaderView = React.forwardRef(({ currentSource, setCurrentSource, addSource, fillSourceText, updateSource, addNote, notes, sources, setActiveTab, showToast, carMode, setCarMode, isMobileDevice, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, setSelectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [loading, setLoading] = useState(false);
       const [content, setContent] = useState(null);
@@ -8250,6 +8276,24 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         return { title: finalTitle, text };
       };
 
+      // A source can arrive as a link with no text — an agent adds one through
+      // the sync repo, and fetching it is the reader's job, not the agent's. The
+      // load runs down the ordinary path, and every loader saves through here:
+      // while a fill is under way, the loaded text goes into that source rather
+      // than a new one. The URL must match, so a file picked mid-fill is still
+      // its own source.
+      const fillTargetRef = useRef(null);
+      const saveLoadedSource = (src) => {
+        const fill = fillTargetRef.current;
+        fillTargetRef.current = null;
+        if (fill && src.url && normalizeUrlKey(src.url) === normalizeUrlKey(fill.url)) {
+          fillSourceText(fill.id, src);
+          return;
+        }
+        addSource(src);
+      };
+      const isTextless = (s) => !!s && (s.type === 'article' || s.type === 'pdf') && !!s.url && !(typeof s.content === 'string' && s.content);
+
       const processPdfContent = async (pdfData, pdfUrl, filenameHint = '') => {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -8351,7 +8395,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         const sentences = splitIntoSentences(fullText);
         sentencesRef.current = sentences;
 
-        addSource({
+        saveLoadedSource({
           type: 'pdf',
           title: pdfTitle,
           url: pdfUrl,
@@ -8413,7 +8457,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // walk below — the duplicate check, the proxy chain, every fallback tier
       // and the saved source — works from one canonical string rather than each
       // tier re-reading the input field.
-      const fetchArticleFromUrl = async (rawInput) => {
+      const loadArticleFromUrl = async (rawInput) => {
         const typed = (rawInput || '').trim();
         if (!typed) return;
 
@@ -8453,8 +8497,19 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           setUrl(url);
         }
 
-        // Bail out before any network work if this URL is already saved.
-        if (!await checkDuplicateBeforeLoad({ url })) {
+        // A link the library holds without its text is that source's missing
+        // text, not a second copy — so no duplicate prompt. Another source's is
+        // opened, and its own reader fills it; the open one is filled here.
+        const textless = sources.find(s => isTextless(s) && normalizeUrlKey(s.url) === normalizeUrlKey(url));
+        if (textless && textless.id !== currentSource?.id) {
+          setUrl('');
+          setCurrentSource(textless);
+          return;
+        }
+        if (textless) {
+          fillTargetRef.current = { id: textless.id, url };
+        } else if (!await checkDuplicateBeforeLoad({ url })) {
+          // Bail out before any network work if this URL is already saved.
           setUrl('');
           return;
         }
@@ -9230,7 +9285,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               const content = isXArticle && attribution ? `By ${attribution}. ${bodyText}` : bodyText;
               const sentences = splitIntoSentences(content);
               sentencesRef.current = sentences;
-              addSource({ type: 'article', title, url, content });
+              saveLoadedSource({ type: 'article', title, url, content });
               setUrl('');
               showToast(isXArticle ? 'X article loaded!' : 'X post loaded!');
               setLoading(false);
@@ -9351,7 +9406,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 const sentences = splitIntoSentences(content);
                 sentencesRef.current = sentences;
                 console.log('[HJ:github] loaded', { chars: content.length, sentences: sentences.length });
-                addSource({ type: 'article', title: article.title || githubDoc.label, url, content });
+                saveLoadedSource({ type: 'article', title: article.title || githubDoc.label, url, content });
                 setUrl('');
                 showToast(filePath ? 'Document loaded!' : 'README loaded!');
                 setLoading(false);
@@ -9469,7 +9524,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               if (article) {
                 const sentences = splitIntoSentences(article.text);
                 sentencesRef.current = sentences;
-                addSource({ type: 'article', title: article.title, url, content: article.text });
+                saveLoadedSource({ type: 'article', title: article.title, url, content: article.text });
                 setUrl('');
                 showToast('Article loaded successfully!');
                 setLoading(false);
@@ -9551,7 +9606,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 if (parsed.text.length >= THIN_ARTICLE_CHARS) {
                   const sentences = splitIntoSentences(parsed.text);
                   sentencesRef.current = sentences;
-                  addSource({ type: 'article', title: parsed.title, url, content: parsed.text });
+                  saveLoadedSource({ type: 'article', title: parsed.title, url, content: parsed.text });
                   setUrl('');
                   showToast('Article loaded successfully!');
                   setLoading(false);
@@ -9581,7 +9636,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               if (wp) {
                 const sentences = splitIntoSentences(wp.text);
                 sentencesRef.current = sentences;
-                addSource({ type: 'article', title: wp.title, url, content: wp.text });
+                saveLoadedSource({ type: 'article', title: wp.title, url, content: wp.text });
                 setUrl('');
                 showToast('Article loaded successfully!');
                 setLoading(false);
@@ -9808,7 +9863,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           const sentences = splitIntoSentences(text);
           sentencesRef.current = sentences;
 
-          addSource({
+          saveLoadedSource({
             type: 'article',
             title: title,
             url: url,
@@ -9828,7 +9883,23 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         setLoading(false);
       };
 
+      // A fill lasts exactly one load, however the load ends.
+      const fetchArticleFromUrl = async (rawInput) => {
+        try { return await loadArticleFromUrl(rawInput); } finally { fillTargetRef.current = null; }
+      };
+
       const fetchContent = () => fetchArticleFromUrl(url);
+
+      // Opening a source that has a link but no text fetches the text. Once per
+      // open: the view remounts per source, so reopening it is the retry, as is
+      // Load with the link still in the box.
+      useEffect(() => {
+        if (!isTextless(currentSource)) return;
+        console.log('[HJ:article] source has a link but no text yet, fetching it:', currentSource.url);
+        setUrl(currentSource.url);
+        setShowManualInput(false);
+        fetchArticleFromUrl(currentSource.url);
+      }, [currentSource?.id]);
 
       // Retrying a saved failure from the library. The URL goes back in the input
       // and straight down the normal path — nothing about the walk differs from a
@@ -9855,6 +9926,16 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         const found = extractUrlFromInput(url);
         const canonicalUrl = found ? stripUrlFragment(found) : '';
         const pastedTitle = found ? '' : (url || '').trim();
+
+        // The open source came as a link whose fetch failed: what's pasted
+        // against that link is its text.
+        if (canonicalUrl && isTextless(currentSource) && normalizeUrlKey(canonicalUrl) === normalizeUrlKey(currentSource.url)) {
+          fillSourceText(currentSource.id, { content: manualContent, url: canonicalUrl });
+          setUrl('');
+          setShowManualInput(false);
+          setManualContent('');
+          return;
+        }
 
         // Only check when a URL is supplied — bare pasted text has no reliable
         // identity key, so we let it through.
