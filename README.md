@@ -56,7 +56,7 @@ HarkenJot has three main views:
 | Tab | Purpose |
 |-----|---------|
 | **Reader** | Load articles, X.com posts/Articles or GitHub READMEs (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
-| **Media** | Play YouTube videos, podcasts (via RSS/audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
+| **Media** | Play YouTube videos, podcasts (via a Spotify or Apple Podcasts episode link, RSS or an audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
 
 The **gear** in the header opens **Settings**: a one-tap library backup, and GitHub sync.
@@ -121,7 +121,7 @@ Once it is on, sync runs:
 
 Notes merge note by note, and status, speed and position merge field by field, so edits on two devices never ask which copy to keep. A sync that would delete many sources at once waits for you to confirm or undo. Set the mode back to **Off** at any time: the app carries on from its own copy, and the repository keeps its full history.
 
-The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder. An agent can add an article as just a title and a link: HarkenJot fetches the text the first time you open it, and syncs it to your other devices.
+The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder. An agent can add an article, a YouTube or X video, or a podcast episode as just a title and a link: HarkenJot fetches the text, or finds the video or the episode's audio, the first time you open it, and syncs it to your other devices.
 
 ## Data & Privacy
 
