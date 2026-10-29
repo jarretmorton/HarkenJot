@@ -2789,7 +2789,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.69.0';
+    const APP_VERSION = '1.70.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -5255,6 +5255,12 @@ Pick a new folder id matching \`[a-z0-9-]{6,40}\` that isn't already used — fo
   for \`text\`, which has no link to fetch from.
 - \`state.json\` — \`{"schema": 1, "status": {"value": "not-started", "updatedAt": "<ISO UTC>", "by": "<agent>"}}\`.
 
+For \`youtube\`, \`xvideo\` and \`podcast\`, \`type\` + \`title\` + \`url\` is enough: the app works out the
+video from the link, or looks up the episode's audio, the first time the source is opened, and syncs
+what it found back here. A podcast's \`url\` must be a link to **one episode**: Apple Podcasts with
+\`?i=<episode id>\`, Spotify \`/episode/…\`, or the audio file itself. A show or feed link is not looked
+up, because it would play whatever episode is newest that day.
+
 Write a new source's files in **one commit** (the Git Data API, or a tool that pushes several files
 at once). If they must go one file per commit, write \`meta.json\` last: the app ignores a folder
 until its \`meta.json\` exists.
@@ -6575,6 +6581,16 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         showToast('Article text loaded');
       };
 
+      // The player's equivalent: what the loader resolved (a podcast's audio,
+      // show and artwork, or a video's ids) fills the source that arrived as a
+      // link. Its own title and link stand — a podcast loader saves the feed it
+      // went through as `url`, which is not the episode the agent pointed at.
+      const fillSourceMedia = (sourceId, loaded, linkUrl) => {
+        const { id, title, url, createdAt, ...fields } = loaded;
+        updateSource(sourceId, fields);
+        if (linkUrl) dropFailedLink(linkUrl);
+      };
+
       const addNote = (note) => {
         const newNote = { ...note, id: generateId(), createdAt: new Date().toISOString() };
         setNotes(prev => {
@@ -6865,6 +6881,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   currentSource={currentSource}
                   setCurrentSource={setCurrentSource}
                   addSource={addSource}
+                  fillSourceMedia={fillSourceMedia}
                   updateSource={updateSource}
                   addNote={addNote}
                   notes={currentNotes}
@@ -11080,7 +11097,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     });
 
     // Media View Component
-    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, volume, setVolume }, ref) => {
+    const MediaView = React.forwardRef(({ currentSource, setCurrentSource, addSource, fillSourceMedia, updateSource, addNote, notes, sources, showToast, setActiveTab, carMode, setCarMode, isMobileDevice, pendingNotebookLMModal, setPendingNotebookLMModal, checkDuplicateBeforeLoad, recordFailedLink, retryLink, onRetryConsumed, selectedVoiceURI, volume, setVolume }, ref) => {
       const [url, setUrl] = useState('');
       const [isPlaying, setIsPlaying] = useState(false);
       const [currentTime, setCurrentTime] = useState(0);
@@ -11187,6 +11204,14 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           if (lastInitializedSourceRef.current === currentSource.id) {
             return;
           }
+          // Its audio is being resolved from its link: this runs again once
+          // the resolved source lands, and that run is the one that loads it.
+          if (resolvesOnOpen(currentSource)) {
+            setVideoId(null);
+            setXVideo(null);
+            setPodcastAudio(null);
+            return;
+          }
           lastInitializedSourceRef.current = currentSource.id;
 
           // Check if audioUrl is missing (older sources might not have it)
@@ -11225,6 +11250,10 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 setHasStoredHandle(false);
                 setNeedsFileRelink(true);
               })();
+            } else if (currentSource.url) {
+              showToast("This podcast has no audio saved, and its link isn't to one episode — paste the episode's Spotify or Apple Podcasts link above");
+              setVideoId(null);
+              setPodcastAudio(null);
             } else {
               showToast('This podcast is missing its audio URL - please re-add it from the original link');
               setVideoId(null);
@@ -11257,7 +11286,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               }
             }
           }, 500);
-        } else if (currentSource && currentSource.type === 'xvideo') {
+        } else if (currentSource && currentSource.type === 'xvideo' && currentSource.xVideoId) {
           if (lastInitializedSourceRef.current === currentSource.id) return;
           lastInitializedSourceRef.current = currentSource.id;
           setVideoId(null);
@@ -11621,6 +11650,10 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         return null;
       };
 
+      const xEmbedUrl = (info) => info.type === 'broadcast'
+        ? `https://broadcast.twitter.com/live/${info.id}/embed`
+        : `https://platform.twitter.com/embed/Tweet.html?id=${info.id}&dnt=true`;
+
       // Fetch the direct MP4 URL for a tweet via Twitter's syndication endpoint
       // (the same one their embed widget uses internally). Returns null if the
       // tweet has no video or the request fails. The endpoint doesn't always
@@ -11727,6 +11760,37 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           return null;
         }
       };
+
+      // An Apple Podcasts link carries the show as /id<collectionId> and, for one
+      // episode, ?i=<trackId>. The page itself is a JS app, so the episode is
+      // resolved through the iTunes lookup API, never by fetching the page.
+      const parseApplePodcastUrl = (rawUrl) => {
+        try {
+          const u = new URL(rawUrl);
+          if (!/(^|\.)podcasts\.apple\.com$/i.test(u.hostname)) return null;
+          const show = /\/id(\d+)/.exec(u.pathname);
+          if (!show) return null;
+          const ep = u.searchParams.get('i');
+          return { collectionId: show[1], episodeId: ep && /^\d+$/.test(ep) ? ep : null };
+        } catch (e) {
+          return null;
+        }
+      };
+
+      // A source that arrived with a link and nothing to play — an agent adds one
+      // through the sync repo as type + title + url. YouTube and X ids come
+      // straight out of the link; a podcast needs the loader to find its audio.
+      const lacksPlayable = (s) => !!s && !!s.url && (
+        (s.type === 'youtube' && !s.videoId) ||
+        (s.type === 'xvideo' && !s.xVideoId) ||
+        (s.type === 'podcast' && !s.audioUrl && !s.localFile));
+      // Only a link to one episode is resolved on open. A show or feed link would
+      // resolve to whatever episode is newest that day, and an older source saved
+      // without its audio URL usually carries just such a feed link.
+      const linkNamesEpisode = (u) => getSpotifyResourceType(u) === 'episode'
+        || !!(parseApplePodcastUrl(u) || {}).episodeId
+        || detectUrlType(u) === 'audio';
+      const resolvesOnOpen = (s) => lacksPlayable(s) && (s.type !== 'podcast' || linkNamesEpisode(s.url));
 
       // Uses the shared top-level fetchWithTimeout (same 8s default this local
       // copy used to have) so proxy and API attempts are all bounded.
@@ -12547,6 +12611,21 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const beginLoadTrace = (targetUrl) => {
         loadTraceRef.current = { from: linkTrace.mark(), url: targetUrl };
       };
+      // While a source with nothing to play is being resolved (see lacksPlayable),
+      // every loader saves through here and the result fills that source instead
+      // of adding a new one. No URL match, unlike the reader's: a podcast loader
+      // saves the feed or show link it resolved to, not the link it was given.
+      const fillTargetRef = useRef(null);
+      const saveLoadedSource = (src) => {
+        const fill = fillTargetRef.current;
+        fillTargetRef.current = null;
+        if (fill) {
+          fillSourceMedia(fill.id, src, fill.url);
+          return { ...src, id: fill.id };
+        }
+        return addSource(src);
+      };
+
       const failedLoad = (stage, reason, detail) => {
         const { from, url: attemptedUrl } = loadTraceRef.current;
         if (!attemptedUrl) return;
@@ -12653,7 +12732,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               link: episode.link || url
             });
 
-            addSource({
+            saveLoadedSource({
               type: 'podcast',
               title: episode.title,
               url: url,
@@ -12796,7 +12875,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             link: episode.link || url
           });
 
-          const newSource = addSource({
+          const newSource = saveLoadedSource({
             type: 'podcast',
             title: episode.title,
             url: url,
@@ -12866,7 +12945,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             link: episode.link || feedUrl
           });
 
-          addSource({
+          saveLoadedSource({
             type: 'podcast',
             title: episode.title,
             url: feedUrl,
@@ -13127,7 +13206,68 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         restoreSavedPosition();
       };
 
+      // Apple Podcasts: the iTunes lookup lists a show's newest 200 episodes with
+      // each one's audio URL and trackId — the ?i= in an episode link — so the
+      // episode is matched by id, never by title. A show link plays the newest.
+      const loadApplePodcast = async ({ collectionId, episodeId }) => {
+        setIsLoadingPodcast(true);
+        showToast('Looking up the episode on Apple Podcasts...');
+        try {
+          const response = await fetchWithTimeout(`https://itunes.apple.com/lookup?id=${collectionId}&entity=podcastEpisode&limit=200`, 10000);
+          if (!response.ok) throw new Error(`iTunes lookup answered ${response.status}`);
+          const results = (await response.json()).results || [];
+          const show = results.find(r => r.kind === 'podcast') || {};
+          const episodes = results.filter(r => r.kind === 'podcast-episode' && r.episodeUrl);
+          const ep = episodeId ? episodes.find(r => String(r.trackId) === episodeId) : episodes[0];
+          if (!ep) {
+            console.log('[HJ:podcast] Apple Podcasts lookup found no match', { collectionId, episodeId, episodes: episodes.length });
+            failedLoad('feed-lookup', episodeId
+              ? `The iTunes lookup did not list episode ${episodeId} among the show's ${episodes.length} newest`
+              : 'The iTunes lookup returned no playable episodes for this show',
+              `collection ${collectionId}`);
+            showToast(episodeId
+              ? "Couldn't find that episode on Apple Podcasts — it may be older than the show's newest 200"
+              : 'No playable episodes found for this show on Apple Podcasts');
+            setIsLoadingPodcast(false);
+            return;
+          }
+          console.log('[HJ:podcast] Apple Podcasts episode resolved', { collectionId, episode: ep.trackName });
+          const showName = ep.collectionName || show.collectionName || '';
+          const artworkUrl = ep.artworkUrl600 || show.artworkUrl600 || ep.artworkUrl160 || '';
+          setVideoId(null);
+          setXVideo(null);
+          setArtworkFailed(false);
+          setPodcastAudio({ audioUrl: ep.episodeUrl, title: ep.trackName, showName, artworkUrl, link: ep.trackViewUrl || url });
+          saveLoadedSource({
+            type: 'podcast',
+            title: ep.trackName || 'Episode',
+            url: url,
+            audioUrl: ep.episodeUrl,
+            showName,
+            artworkUrl,
+            link: ep.trackViewUrl || url,
+            feedUrl: show.feedUrl || '',
+            collectionId: Number(collectionId)
+          });
+          setUrl('');
+          showToast('Episode loaded!');
+        } catch (error) {
+          console.log('[HJ:podcast] Apple Podcasts lookup failed:', error?.message || String(error));
+          failedLoad('feed-lookup', 'The iTunes lookup for this Apple Podcasts link failed', error?.message || String(error));
+          showToast('Could not reach Apple Podcasts — try again later');
+        }
+        setIsLoadingPodcast(false);
+      };
+
+      // A fill lasts one load, however it ends — except a load that re-enters
+      // through the latch, which is the same load continuing.
+      const RELATCH = 'relatch';
       const loadMedia = async () => {
+        let outcome;
+        try { outcome = await loadMediaOnce(); } finally { if (outcome !== RELATCH) fillTargetRef.current = null; }
+      };
+
+      const loadMediaOnce = async () => {
         // A paste is not always a link — see extractUrlFromInput. Everything
         // below reads the URL off component state, so resolve the input first
         // and let the state land before loading anything.
@@ -13145,7 +13285,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           console.log('[HJ:media] loading the link found in the input:', found);
           setUrl(found);
           setRetryArmed(true);
-          return;
+          return RELATCH;
         }
 
         beginLoadTrace(url);
@@ -13162,8 +13302,25 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           const xInfo = extractXVideoInfo(url);
           if (xInfo) dupCandidate.xVideoId = xInfo.id;
         }
-        if (!await checkDuplicateBeforeLoad(dupCandidate)) {
+        // A link the library holds with nothing to play is that source's missing
+        // half, not a second copy — so no duplicate prompt. Another source's is
+        // opened, and opening it resolves it; the open one is resolved here.
+        const unresolved = !fillTargetRef.current && sources.find(s => lacksPlayable(s) && normalizeUrlKey(s.url) === normalizeUrlKey(url));
+        if (unresolved && unresolved.id !== currentSource?.id) {
           setUrl('');
+          setCurrentSource(unresolved);
+          return;
+        }
+        if (unresolved) {
+          fillTargetRef.current = { id: unresolved.id, url };
+        } else if (!fillTargetRef.current && !await checkDuplicateBeforeLoad(dupCandidate)) {
+          setUrl('');
+          return;
+        }
+
+        const apple = parseApplePodcastUrl(url);
+        if (apple) {
+          await loadApplePodcast(apple);
           return;
         }
 
@@ -13194,7 +13351,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             console.log('Could not fetch YouTube metadata:', err);
           }
 
-          addSource({
+          saveLoadedSource({
             type: 'youtube',
             title: videoTitle,
             url: url,
@@ -13213,9 +13370,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             }
           }, 100);
         } else if (urlType === 'spotify') {
-          loadPodcastFromSpotify();
+          await loadPodcastFromSpotify();
         } else if (urlType === 'rss') {
-          loadRSSFeed(url);
+          await loadRSSFeed(url);
         } else if (urlType === 'audio') {
           // Direct audio URL
           setVideoId(null);
@@ -13226,7 +13383,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             title: 'Audio',
             showName: ''
           });
-          addSource({
+          saveLoadedSource({
             type: 'podcast',
             title: 'Audio',
             url: url,
@@ -13242,9 +13399,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             return;
           }
 
-          const embedUrl = info.type === 'broadcast'
-            ? `https://broadcast.twitter.com/live/${info.id}/embed`
-            : `https://platform.twitter.com/embed/Tweet.html?id=${info.id}&dnt=true`;
+          const embedUrl = xEmbedUrl(info);
 
           // Fetch oEmbed metadata (works for tweets; may not work for broadcasts)
           let videoTitle = info.type === 'broadcast' ? 'X Broadcast' : 'X Video';
@@ -13282,7 +13437,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           setDuration(0);
           setXVideo({ id: info.id, embedUrl, type: info.type, mp4Url });
 
-          addSource({
+          saveLoadedSource({
             type: 'xvideo',
             title: videoTitle,
             url: url,
@@ -13308,7 +13463,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             if (text) {
               // Check if response looks like XML/RSS content
               if (text.trim().startsWith('<?xml') || text.trim().startsWith('<rss') || text.includes('<channel>') || text.includes('<feed')) {
-                loadRSSFeed(url);
+                await loadRSSFeed(url);
                 return;
               }
             }
@@ -13337,6 +13492,26 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         setRetryArmed(false);
         loadMedia();
       }, [retryArmed, url]);
+
+      // Opening a source with nothing to play resolves it. Once per open: the view
+      // remounts per source, so reopening it is the retry, as is Load with the
+      // link still in the box.
+      useEffect(() => {
+        const s = currentSource;
+        if (!resolvesOnOpen(s)) return;
+        // YouTube and X ids are in the link itself — nothing to fetch.
+        if (s.type === 'youtube') {
+          const id = extractVideoId(s.url);
+          if (id) { updateSource(s.id, { videoId: id }); return; }
+        } else if (s.type === 'xvideo') {
+          const info = extractXVideoInfo(s.url);
+          if (info) { updateSource(s.id, { xVideoId: info.id, xVideoType: info.type, embedUrl: xEmbedUrl(info) }); return; }
+        }
+        console.log('[HJ:media] source has a link but nothing to play yet, resolving it:', s.url);
+        fillTargetRef.current = { id: s.id, url: s.url };
+        setUrl(s.url);
+        setRetryArmed(true);
+      }, [currentSource?.id]);
 
       // Text note functions
       const openTextNote = () => {

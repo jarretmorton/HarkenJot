@@ -352,7 +352,7 @@ loads on demand from `cdn.jsdelivr.net`.
 - **WordPress REST API** — `<root>/wp-json/wp/v2/posts?slug=<slug>` for the canonical post body on any WordPress publisher, with `wp/v2/search` as the way to find a post that is not the `post` type. Asked **as JSONP first** (`&_jsonp=<callback>`, loaded as a `<script>` inside the sandboxed frame — see below), then as a direct fetch, then through the proxy chain. `<root>` is not always the origin — see **An empty array is not a missing API**
 - **Wiktionary / Wikipedia** — `en.wiktionary.org/api/rest_v1/page/definition/` and `en.wikipedia.org/api/rest_v1/page/summary/` (both CORS-enabled, fetched directly with 3 s timeouts) for the voice-triggered "explain \<term\>" lookup
 - **rss2json** — `api.rss2json.com` server-side RSS-to-JSON conversion (CORS-enabled) for feeds whose bot protection blocks raw CORS proxies; tried *first* for directly pasted Substack feeds (`api.substack.com/feed/podcast/*.rss`) and as a *last resort* for all other feeds (free tier only returns the ~10 newest items, so it's deprioritized when matching a specific episode title)
-- **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists
+- **iTunes** — `itunes.apple.com/search` for podcast discovery and cover art; `itunes.apple.com/lookup` for episode lists, and for Apple Podcasts links (`?i=` is the episode's `trackId`)
 - **RSS feeds** — Custom parser for podcast episodes
 - **Gemini Notebook** (formerly NotebookLM) — `notebook.google.com` opened in a new tab ("Open in Gemini Notebook" buttons); notebook URLs can be linked to local-audio sources. Google rebranded the product in July 2026 and moved it off `notebooklm.google.com`, which still redirects. `NOTEBOOK_URL_RE` accepts the new host plus both legacy hosts so links saved before the rebrand keep validating; `NOTEBOOK_HOME_URL` is the single home-page constant. Stored URLs are never rewritten — the redirect covers them. Internal field names (`isNotebookLM`, `notebookLMUrl`) and `Icons.NotebookLM` deliberately keep the old name so existing saved data is untouched.
 
@@ -549,6 +549,8 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
   - a local edit lost to a repo version stamped in the future (`_stampAfter`);
   - the mass-delete guard offered no way back (**Undo the deletions**).
 - **v1.69.0** let an agent add a source as a link alone (see **A source can arrive without its text**).
+- **v1.70.0** did the same for YouTube, X videos and podcasts, and added Apple Podcasts episode links
+  (see **A media source can arrive without anything to play**).
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -692,6 +694,34 @@ pending), and the other device picks it up through the pull rule above without f
 The same fill applies when the link is typed into the reader (it opens the textless source rather than
 prompting about a duplicate) and when a failed fetch is followed by a paste against that link. A fill
 that fails is recorded in Unloaded links like any other load; reopening the source is the retry.
+
+**A media source can arrive without anything to play.** The player needs `videoId` (YouTube),
+`xVideoId` / `xVideoType` / `embedUrl` (X) or `audioUrl` (podcast), and an agent sends only type, title
+and link. `lacksPlayable` names such a source, and opening it resolves it in MediaView:
+
+- **YouTube and X ids come out of the link** (`extractVideoId`, `extractXVideoInfo`, `xEmbedUrl`) and
+  are written with `updateSource` — no network, no loader.
+- **A podcast runs the ordinary `loadMedia` on its link** with `fillTargetRef` set. Every loader saves
+  through `saveLoadedSource`, which hands the result to App's `fillSourceMedia`: all the resolved fields
+  except `title` and `url`, because the podcast loaders save the *feed* they went through as `url`.
+  For the same reason the match is by fill target, not by URL as in the reader. The fill lasts one
+  load, so `loadMedia` awaits the Spotify and RSS loaders it used to fire and forget, and a load that
+  re-enters through the latch (`RELATCH`) keeps it.
+- **Only a link to one episode is resolved on open** (`resolvesOnOpen` / `linkNamesEpisode`: Apple
+  `?i=`, Spotify `/episode/`, an audio file). A show or feed link would resolve to whatever is newest
+  that day, and older sources saved without `audioUrl` usually carry exactly such a feed link — they
+  get a toast asking for the episode link instead.
+
+The resolved fields are ordinary source fields, so the recorder stamps them as `state.json` registers
+and the other device gets them from its pull without resolving anything. Typing an unresolved
+source's link into the player opens and resolves it rather than prompting about a duplicate.
+
+**Apple Podcasts links go through the iTunes lookup, never the page** (`parseApplePodcastUrl`,
+`loadApplePodcast`). The page is a JS app; before v1.70.0 `detectUrlType` sent it down the RSS path,
+which could only fail. `lookup?id=<collectionId>&entity=podcastEpisode&limit=200` lists the show's newest
+200 episodes, and the episode is matched on `trackId` — the `?i=` in the link — never by title. An
+older episode is recorded as `feed-lookup` in Unloaded links. A show link plays the newest episode, as
+a Spotify show link does.
 
 **The merge is three-way without storing a base (`_rebase`).** Before `mergeFile`, every register
 and note this device hasn't changed itself is replaced with the repo's version. "Changed itself"
