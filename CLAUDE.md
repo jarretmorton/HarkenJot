@@ -551,6 +551,7 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
 - **v1.69.0** let an agent add a source as a link alone (see **A source can arrive without its text**).
 - **v1.70.0** did the same for YouTube, X videos and podcasts, and added Apple Podcasts episode links
   (see **A media source can arrive without anything to play**).
+- **v1.70.1** looked up the channel name of a video that arrived without one.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -711,6 +712,12 @@ and link. `lacksPlayable` names such a source, and opening it resolves it in Med
   `?i=`, Spotify `/episode/`, an audio file). A show or feed link would resolve to whatever is newest
   that day, and older sources saved without `audioUrl` usually carry exactly such a feed link — they
   get a toast asking for the episode link instead.
+
+**A video with no channel name gets one on open.** An agent's YouTube or X video arrives with a title
+and link only, so opening one asks the same oEmbed endpoint the paste path does (`youtube.com/oembed`,
+`publish.twitter.com/oembed`) for `author_name`, in the background, and writes it as `channelName`.
+The title is never taken from oEmbed: the source's own title stands, as everywhere else in this fill.
+A failed lookup leaves the video playable without a name and is retried on the next open.
 
 The resolved fields are ordinary source fields, so the recorder stamps them as `state.json` registers
 and the other device gets them from its pull without resolving anything. Typing an unresolved

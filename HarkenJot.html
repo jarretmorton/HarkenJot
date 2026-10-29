@@ -2789,7 +2789,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.70.0';
+    const APP_VERSION = '1.70.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -13511,6 +13511,28 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         fillTargetRef.current = { id: s.id, url: s.url };
         setUrl(s.url);
         setRetryArmed(true);
+      }, [currentSource?.id]);
+
+      // A video with no channel name — an agent's, which arrives as title + link,
+      // or one whose oEmbed lookup failed when it was pasted — gets it from the
+      // same oEmbed endpoint the paste path asks. In the background, once per
+      // open; the title is never touched, since the source's own one stands.
+      useEffect(() => {
+        const s = currentSource;
+        if (!s || !s.url || s.channelName || (s.type !== 'youtube' && s.type !== 'xvideo')) return;
+        const endpoint = s.type === 'youtube'
+          ? `https://www.youtube.com/oembed?url=${encodeURIComponent(s.url)}&format=json`
+          : `https://publish.twitter.com/oembed?url=${encodeURIComponent(s.url)}&omit_script=true`;
+        (async () => {
+          try {
+            const response = await fetchWithTimeout(endpoint, 8000);
+            if (!response.ok) throw new Error(`oEmbed answered ${response.status}`);
+            const name = ((await response.json()).author_name || '').trim();
+            if (name) updateSource(s.id, { channelName: name });
+          } catch (e) {
+            console.log('[HJ:media] channel name lookup failed for', s.url, '—', e?.message || String(e));
+          }
+        })();
       }, [currentSource?.id]);
 
       // Text note functions
