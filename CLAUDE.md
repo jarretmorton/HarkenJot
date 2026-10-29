@@ -548,6 +548,7 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
 - **v1.68.1** fixed two things the Phase 4 field test found:
   - a local edit lost to a repo version stamped in the future (`_stampAfter`);
   - the mass-delete guard offered no way back (**Undo the deletions**).
+- **v1.69.0** let an agent add a source as a link alone (see **A source can arrive without its text**).
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -662,11 +663,14 @@ Each pull goes through these steps:
    updaters through the same pure `patchSources` / `patchNotes`. Each updater also moves
    `syncPrevRef` past the change, so the recorder doesn't stamp the repo's edits as this device's own.
 
-Four rules a pull keeps:
+Five rules a pull keeps:
 
 - **An existing source keeps its own meta;** only what `state.json` carries is patched in, compared
   the way the app reads it (`getReadStatus`, null equal to missing). A source new to this device is
   inserted whole, where its `createdAt` puts it.
+- **Text this device lacks is the one exception to write-once.** For a source held with no `content`,
+  `text.txt` is read whenever the repo has it, changed since the last pull or not, and patched in.
+  Text this device already has always stands.
 - **The open source is never replaced.** Its object is left alone because ReaderView resets on a new
   `currentSource`. Its patched copy in `sources` shows the next time it is opened. Its position is not
   overwritten either: if the repo's position won the merge, this device's position is kept and
@@ -675,6 +679,19 @@ Four rules a pull keeps:
 - **An unreadable file in the repo is never applied.** This device's copy stands and the file counts
   as pending, so the next push replaces it.
 - **A newer `schemaVersion` stops the pull** before anything is read.
+
+**A source can arrive without its text.** An agent may add an `article` or `pdf` as `meta.json` +
+`state.json` with a `url` and no `text.txt`: reproducing a whole article inside a tool call is where
+an LLM truncates or quietly summarises, and the reader's own pipeline is the better fetcher. Opening
+such a source (`isTextless` in ReaderView) runs the ordinary `fetchArticleFromUrl` on its link, and
+every loader there saves through `saveLoadedSource`, which, while `fillTargetRef` names a source with
+the same URL, hands the text to App's `fillSourceText` instead of `addSource`. Only `content` is taken;
+the agent's title and type stand. The next sync sends `text.txt` (a write-once file the repo lacks is
+pending), and the other device picks it up through the pull rule above without fetching anything.
+
+The same fill applies when the link is typed into the reader (it opens the textless source rather than
+prompting about a duplicate) and when a failed fetch is followed by a paste against that link. A fill
+that fails is recorded in Unloaded links like any other load; reopening the source is the retry.
 
 **The merge is three-way without storing a base (`_rebase`).** Before `mergeFile`, every register
 and note this device hasn't changed itself is replaced with the repo's version. "Changed itself"

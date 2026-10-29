@@ -121,7 +121,7 @@ Once it is on, sync runs:
 
 Notes merge note by note, and status, speed and position merge field by field, so edits on two devices never ask which copy to keep. A sync that would delete many sources at once waits for you to confirm or undo. Set the mode back to **Off** at any time: the app carries on from its own copy, and the repository keeps its full history.
 
-The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder.
+The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder. An agent can add an article as just a title and a link: HarkenJot fetches the text the first time you open it, and syncs it to your other devices.
 
 ## Data & Privacy
 
