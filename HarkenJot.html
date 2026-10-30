@@ -2901,7 +2901,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.71.1';
+    const APP_VERSION = '1.71.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -15299,6 +15299,12 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         };
       });
 
+      // Initialize only ever works once, into an empty repo. Once this device
+      // holds a record of the configured repo (it initialized it, or has pulled
+      // from it), the repo holds a library and Initialize could only refuse.
+      const syncMeta = HJStore.get('sync_meta');
+      const initialized = !!(config && syncMeta && syncMeta.repo === `${config.owner}/${config.repo}` && syncMeta.branch === (config.branch || 'main'));
+
       const handleInitialise = () => {
         if (!confirm(`Write this library — ${sources.length} sources and ${notes.length} notes — into ${config.owner}/${config.repo}?\n\nIt goes in as one commit and only into a repo that has never held a library. A backup downloads first.`)) return;
         backupNow('before-init');
@@ -15373,13 +15379,15 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               <button className="btn btn-secondary" onClick={() => backupNow()}>
                 <Icons.FolderUp /> Back up
               </button>
-              <button className="btn btn-secondary" onClick={restoreFromBackup}>
+              {/* Off whenever a repo is set — every mode records changes, so a full
+                  replace would sync as deleting the library from any of them. */}
+              <button className="btn btn-secondary" onClick={restoreFromBackup} disabled={!!config} title={config ? 'Off while sync is set up — disconnect the repo first' : undefined}>
                 <Icons.FolderDown /> Restore from backup
               </button>
             </div>
             {config && (
               <p className="settings-meta">
-                While sync is set up, a full restore is off (it would sync while deleting your library).
+                While sync is set up, a full restore is off (it would sync while deleting your library). Disconnect the repo first to restore.
               </p>
             )}
             <p className="settings-meta">
@@ -15505,7 +15513,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               <div className="settings-actions repo-actions">
                 {mode !== 'off' && <button className="btn btn-primary" onClick={() => handlePull()} disabled={!!busy || !hasToken}>{mode === 'sync' ? 'Sync' : 'Pull'}</button>}
                 <button className="btn btn-secondary" onClick={handleCheck} disabled={!!busy || !hasToken}>Check Connection</button>
-                <button className={`btn ${mode === 'off' ? 'btn-primary' : 'btn-secondary'}`} onClick={handleInitialise} disabled={!!busy || !hasToken}>Initialize</button>
+                <button className={`btn ${mode === 'off' && !initialized ? 'btn-primary' : 'btn-secondary'}`} onClick={handleInitialise} disabled={!!busy || !hasToken || initialized} title={initialized ? 'Already done — this repo holds the library' : undefined}>Initialize</button>
               </div>
               {!hasToken && <p className="settings-meta">Add an access token above first.</p>}
               {busy && <p className="settings-status">{syncStatus.state === 'syncing' ? syncStatus.message : busy.label}</p>}
