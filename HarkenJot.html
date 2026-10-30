@@ -1915,36 +1915,6 @@
       margin: 0 auto;
     }
 
-    /* Export Section */
-    .export-section {
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--border);
-    }
-
-    .export-btn {
-      width: 100%;
-      padding: 0.625rem;
-      background: var(--bg-tertiary);
-      border: 2px dashed var(--border);
-      border-radius: 8px;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 0.8rem;
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: all 0.2s ease;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.375rem;
-    }
-
-    .export-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-      background: var(--accent-soft);
-    }
-
     /* Tabs for Media */
     .media-tabs {
       display: flex;
@@ -2615,9 +2585,15 @@
       white-space: nowrap;
     }
 
-    .backup-actions .btn {
+    .backup-actions .btn,
+    .repo-actions .btn {
       flex: 1 1 auto;
       justify-content: center;
+    }
+
+    .backup-actions,
+    .repo-actions {
+      flex-wrap: nowrap;
     }
 
     .select-bar-count {
@@ -2925,7 +2901,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.71.0';
+    const APP_VERSION = '1.71.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4577,7 +4553,7 @@
         const paths = new Set(before.entries.map(e => e.path));
         if (paths.has('HarkenJot.html')) throw this._fail('This looks like the HarkenJot app’s own repo, not a library repo.');
         if (paths.has('harkenjot.json') || before.entries.some(e => e.path.startsWith('sources/'))) {
-          throw this._fail('This repo already holds a HarkenJot library. Initialise only ever fills an empty one, so nothing was changed.');
+          throw this._fail('This repo already holds a HarkenJot library. Initialize only ever fills an empty one, so nothing was changed.');
         }
 
         onProgress('Preparing files…');
@@ -4595,11 +4571,11 @@
           commit = await this._commitFiles(files, {
             parent: head,
             baseTree: before.treeSha,
-            message: `Initialise HarkenJot library from ${cfg.device || 'device'} (${sourceCount} sources, ${noteCount} notes)`,
+            message: `Initialize HarkenJot library from ${cfg.device || 'device'} (${sourceCount} sources, ${noteCount} notes)`,
             onProgress,
           });
         } catch (e) {
-          if (e.status === 422) throw this._fail('The repo changed while this was running, so the library was not added and nothing in it was replaced. Run Initialise again.', 422);
+          if (e.status === 422) throw this._fail('The repo changed while this was running, so the library was not added and nothing in it was replaced. Run Initialize again.', 422);
           throw e;
         }
 
@@ -4622,7 +4598,7 @@
           initialisedAt: new Date().toISOString(),
           lastPullAt: new Date().toISOString(),
         }).catch((e) => console.error('Failed to save sync state:', e));
-        this._log(`Initialised ${cfg.owner}/${cfg.repo} with ${sourceCount} sources and ${noteCount} notes`);
+        this._log(`Initialized ${cfg.owner}/${cfg.repo} with ${sourceCount} sources and ${noteCount} notes`);
         return {
           files: names.length,
           sources: sourceCount,
@@ -5021,7 +4997,7 @@
 
         await this._readRepo(); // every time: a repo made public later stops the pull
         const head = await this._headCommit(branch);
-        if (!head) throw this._fail('The repo is empty — run Initialise from the device whose library is most complete.');
+        if (!head) throw this._fail('The repo is empty — run Initialize from the device whose library is most complete.');
         const stored = HJStore.get('sync_meta');
         const meta = stored && stored.repo === repoKey && stored.branch === branch ? stored : null;
 
@@ -5036,7 +5012,7 @@
           if (tree.truncated) throw this._fail('GitHub listed only part of the repo, so the pull stopped rather than miss files.');
           remote = {};
           tree.entries.forEach(e => { if (e.type === 'blob') remote[e.path] = e.sha; });
-          if (!remote['harkenjot.json']) throw this._fail("This repo doesn't hold a HarkenJot library yet — run Initialise first.");
+          if (!remote['harkenjot.json']) throw this._fail("This repo doesn't hold a HarkenJot library yet — run Initialize first.");
           const known = (meta && meta.shas) || {};
           if (remote['harkenjot.json'] !== known['harkenjot.json']) {
             let version = 1;
@@ -6587,9 +6563,13 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         }
       }, []);
 
+      // Each toast gets its full three seconds: the previous toast's timer is
+      // cancelled, or it would hide a newer message moments after it appeared.
+      const toastTimerRef = useRef(null);
       const showToast = (message) => {
         setToast({ show: true, message });
-        setTimeout(() => setToast({ show: false, message: '' }), 3000);
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast({ show: false, message: '' }), 3000);
       };
 
       const addSource = (source) => {
@@ -6760,6 +6740,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         // Set up undo
         clearTimeout(undoTimeoutRef.current);
         setUndoData({ type: 'note', data: noteToDelete });
+        clearTimeout(toastTimerRef.current);
         setToast({ show: true, message: 'Note deleted', showUndo: true });
 
         // Auto-clear undo after 5 seconds
@@ -6849,6 +6830,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         // Set up undo
         clearTimeout(undoTimeoutRef.current);
         setUndoData({ type: 'source', data: { source: sourceToDelete, notes: relatedNotes, index: sourceIndex } });
+        clearTimeout(toastTimerRef.current);
         setToast({ show: true, message: 'Item deleted from library', showUndo: true });
 
         // Auto-clear undo after 5 seconds
@@ -6879,6 +6861,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         // Set up undo
         clearTimeout(undoTimeoutRef.current);
         setUndoData({ type: 'sourceMove', data: { sourceId, prevCreatedAt: sourceToMove.createdAt, prevIndex: sourceIndex } });
+        clearTimeout(toastTimerRef.current);
         setToast({ show: true, message: 'Item moved to today', showUndo: true });
 
         // Auto-clear undo after 5 seconds
@@ -6971,7 +6954,13 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             </nav>
             <button
               className={`settings-button ${activeTab === 'settings' ? 'active' : ''}`}
-              onClick={() => { changeTab('settings'); setCarMode(false); }}
+              onClick={() => {
+                // A second press closes Settings. Opening it pushed a history
+                // entry, so going back returns to whichever tab it came from.
+                if (activeTab === 'settings') { history.back(); return; }
+                changeTab('settings');
+                setCarMode(false);
+              }}
               title={HJSync.mode() !== 'off' && syncStatus.message ? `Settings — ${syncStatus.message}` : 'Settings'}
               aria-label="Settings"
             >
@@ -15306,7 +15295,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           ok: true,
           message: r.initialised
             ? `Connected to ${r.repo} (private). It holds a library of ${r.sources} source${r.sources !== 1 ? 's' : ''}.`
-            : `Connected to ${r.repo} (private). It is ready for Initialise${r.empty ? ' — no commits yet' : ''}.`,
+            : `Connected to ${r.repo} (private). It is ready for Initialize${r.empty ? ' — no commits yet' : ''}.`,
         };
       });
 
@@ -15327,7 +15316,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           return {
             ok: true,
             link: r.commitUrl,
-            message: `Initialised: ${r.sources} sources and ${r.notes} notes as ${r.files} files, each checked after upload${r.truncated ? ' (GitHub listed only part of the tree, so the check was partial)' : ''}.`,
+            message: `Initialized: ${r.sources} sources and ${r.notes} notes as ${r.files} files, each checked after upload${r.truncated ? ' (GitHub listed only part of the tree, so the check was partial)' : ''}.`,
           };
         });
       };
@@ -15378,7 +15367,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           <section className="settings-card">
             <h2>Library backup</h2>
             <p className="settings-help">
-              Back up downloads the whole library as one JSON file. Restore from backup reads one back in.
+              Back up and restore the whole library with one JSON file.
             </p>
             <div className="settings-actions backup-actions">
               <button className="btn btn-secondary" onClick={() => backupNow()}>
@@ -15390,7 +15379,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             </div>
             {config && (
               <p className="settings-meta">
-                While sync is set up, a full restore is off — it would sync as deleting your library. A single-source file (from a source’s Export button) can still be added.
+                While sync is set up, a full restore is off (it would sync while deleting your library).
               </p>
             )}
             <p className="settings-meta">
@@ -15404,7 +15393,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           <section className="settings-card">
             <h2>GitHub sync</h2>
             <p className="settings-help">
-              Keeps the library in a private GitHub repo shared by your devices. With Mode off, GitHub is only contacted when you press one of the buttons below.
+              Keeps the library in a private GitHub repo shared by your devices.
             </p>
 
             <div className="settings-field">
@@ -15508,15 +15497,15 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             <section className="settings-card">
               <h2>Repository</h2>
               <p className="settings-help">
-                Check connection only reads. Initialise is the one-time move of a library into the repo — run it once, from the device whose library is most complete, into a repo that has never held one. Every other device joins with Pull-only.
+                Check Connection only reads. Initialize is the one-time move of a library into the repo — run it once, from the device whose library is most complete, into a repo that has never held one. Every other device joins with Pull-only.
               </p>
               <p className="settings-meta">
                 <a href={HJSync.indexUrl()} target="_blank" rel="noopener noreferrer">View INDEX.md</a> — every source with its status, note count and a link to its folder. Sync rewrites it whenever the library changes.
               </p>
-              <div className="settings-actions">
-                {mode !== 'off' && <button className="btn btn-primary" onClick={() => handlePull()} disabled={!!busy || !hasToken}>{mode === 'sync' ? 'Sync now' : 'Pull now'}</button>}
-                <button className="btn btn-secondary" onClick={handleCheck} disabled={!!busy || !hasToken}>Check connection</button>
-                <button className={`btn ${mode === 'off' ? 'btn-primary' : 'btn-secondary'}`} onClick={handleInitialise} disabled={!!busy || !hasToken}>Initialise repo from this library</button>
+              <div className="settings-actions repo-actions">
+                {mode !== 'off' && <button className="btn btn-primary" onClick={() => handlePull()} disabled={!!busy || !hasToken}>{mode === 'sync' ? 'Sync' : 'Pull'}</button>}
+                <button className="btn btn-secondary" onClick={handleCheck} disabled={!!busy || !hasToken}>Check Connection</button>
+                <button className={`btn ${mode === 'off' ? 'btn-primary' : 'btn-secondary'}`} onClick={handleInitialise} disabled={!!busy || !hasToken}>Initialize</button>
               </div>
               {!hasToken && <p className="settings-meta">Add an access token above first.</p>}
               {busy && <p className="settings-status">{syncStatus.state === 'syncing' ? syncStatus.message : busy.label}</p>}
@@ -16068,67 +16057,6 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         showToast('Note copied to clipboard');
       };
 
-      const exportAllNotes = () => {
-        if (!currentSource) return;
-
-        const getFirstThreeWords = (text) => {
-          if (!text) return '';
-          const words = text.trim().split(/\s+/).slice(0, 3);
-          return words.join(' ');
-        };
-
-        const lines = [formatSourceHeader(currentSource)];
-
-        if (notes.length > 0) {
-          lines.push('Notes:');
-          notes.forEach(note => {
-            let notePrefix = '';
-            if (note.timestamp !== undefined) {
-              notePrefix = `[${formatTime(note.timestamp)}] `;
-            } else if (note.position !== undefined && note.context) {
-              const sentenceLabel = note.fullSentenceCaptured
-                ? `"${note.context}"`
-                : `"${getFirstThreeWords(note.context)}..."`;
-              notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
-            }
-            lines.push(`- ${notePrefix}${note.text}`);
-          });
-        }
-
-        navigator.clipboard.writeText(lines.join(SOFT_BREAK));
-        showToast(notes.length > 0 ? 'All notes copied to clipboard' : 'Title and link copied to clipboard');
-      };
-
-      const exportCurrentSource = () => {
-        if (!currentSource) return;
-
-        // Strip sentences array from source to reduce export size
-        const { sentences: _, ...cleanSource } = currentSource;
-
-        const exportData = {
-          version: 2,
-          exportType: 'single-source',
-          exportedAt: new Date().toISOString(),
-          sources: [cleanSource],
-          notes: notes
-        };
-
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const now = new Date();
-        const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        // Sanitize title for filename
-        const safeTitle = (currentSource.title || 'source').replace(/[^a-zA-Z0-9]/g, '-').substring(0, 30);
-        a.download = `harkenjot-${safeTitle}-${localDate}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToast('Source and notes exported');
-      };
-
       return (
         <div>
           <div className="sidebar-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -16142,15 +16070,6 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 <Icons.X />
               </button>
             )}
-          </div>
-
-          <div className="export-section" style={{ marginTop: '0.5rem', marginBottom: '0.5rem', borderTop: 'none', display: 'flex', gap: '0.5rem' }}>
-            <button className="export-btn" onClick={exportAllNotes} style={{ flex: 1 }}>
-              <Icons.Copy /> Copy
-            </button>
-            <button className="export-btn" onClick={exportCurrentSource} style={{ flex: 1 }}>
-              <Icons.FolderUp /> Export
-            </button>
           </div>
 
           {notes.length === 0 ? (
