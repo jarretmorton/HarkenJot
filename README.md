@@ -108,7 +108,7 @@ To set it up:
 2. **Create a fine-grained personal access token** (GitHub → Settings → Developer settings). Give it access to that one repository only, with **Contents: Read and write**, and an expiry date.
 3. **On the device with your most complete library:**
    1. Open **Settings** (the gear) and enter the repository and the token. A backup downloads first.
-   2. Press **Initialise repo from this library**.
+   2. Press **Initialize**.
    3. Set the mode to **Sync**.
 4. **On every other device:** enter the same repository with its own token, then choose **Pull-only** to take the library in without sending anything back. Switch to **Sync** once you're happy.
 

@@ -174,7 +174,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 6701–7209 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
 | 7210–10668 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
 | 10669–14367 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 14368–14695 | `SettingsView` — Library backup and Restore from backup, sync settings and mode, and the Repository card (Pull now / Check connection / Initialise, sync log) |
+| 14368–14695 | `SettingsView` — Library backup and Restore from backup, sync settings and mode, and the Repository card (Sync or Pull / Check Connection / Initialize on one row, sync log) |
 | 14696–15165 | `LibraryView` — Source and note management, the toolbar (Search · Filter · Copy · Sync), copy selection, the **Unloaded links** panel |
 | 15166–15370 | `NoteSidebar` — Notes display, editing, and navigation |
 | 15372 | `ReactDOM.createRoot` render call |
@@ -242,7 +242,7 @@ the user actually used last.
 | `feed_cache` | `harkenjot_feed_cache` | Parsed podcast episode lists keyed by feed URL (12 h TTL, 15 feeds LRU, ≤100 items each) so repeat loads skip refetch/reparse |
 | `failed_links` | `harkenjot_failed_links` | Links that failed to load, newest first, capped at 50 — each with where it failed and the trace of the attempt |
 | `sync_clock` | `harkenjot_sync_clock` | GitHub sync's record of local changes — per-field and per-note timestamps, and tombstones for deletes. Absent until a sync repo is configured (see **GitHub sync**) |
-| `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo as of the last pull or Initialise: repo, branch and commit; the repo's blob SHA per file (`shas`); this device's SHA per file then (`localShas`); the paths this device has that the repo doesn't (`pending`); the positions as last synced (`positions`) |
+| `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo as of the last pull or Initialize: repo, branch and commit; the repo's blob SHA per file (`shas`); this device's SHA per file then (`localShas`); the paths this device has that the repo doesn't (`pending`); the positions as last synced (`positions`) |
 
 Four keys live in `localStorage` only, never in `HJStore`, and are never exported:
 
@@ -486,6 +486,16 @@ Back up (which also records the last-backup time the weekly reminder reads), so 
 became **Restore from backup** beside it: rare and deliberate, and refused for a full replace while a
 repo is set, which Settings can explain in place.
 
+**The gear toggles Settings.** A second press goes `history.back()`: opening Settings pushed a history
+entry, so back lands on whichever tab it came from, and the browser's own Back agrees with it.
+
+**The notes panel has no panel-wide Copy or Export.** Copying moved to the Library's selection (which
+can take one source), and backups are Settings' job; each note keeps its own Copy.
+
+**A toast gets its full three seconds.** `showToast` cancels the previous toast's hide timer (and the
+undo toasts cancel it too); before, a toast shown shortly after another was hidden by the older
+toast's timer, sometimes within milliseconds.
+
 ### Saving a link that failed to load
 
 A URL typed into the reader or player used to live only in that view's input box.
@@ -554,7 +564,7 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
 
 - **Phase 1 (v1.64.0)** shipped the Settings page, the file formats and merge rules, and the local
   change recorder.
-- **Phase 2 (v1.65.0)** added the GitHub client and the one-time **Initialise**.
+- **Phase 2 (v1.65.0)** added the GitHub client and the one-time **Initialize**.
 - **Phase 3 (v1.66.0)** added **Pull-only** mode: the repo's changes come into this device, and
   nothing goes back. Two-way Sync is still shown but disabled. With the mode Off, GitHub is contacted
   only when a Settings button is pressed.
@@ -641,11 +651,12 @@ Three rules the recorder follows:
 **Two guards are in place while a repo is configured:**
 
 - **Settings → Restore from backup refuses a full replace,** because sync would read the swap as deleting
-  the whole library. Adding a single-source file still works.
+  the whole library. A single-source file still adds (the per-source Export that made them is gone since
+  v1.71.1, but older exports still read).
 - **Settings refuses the public app repo (`HarkenJot`) and any token that isn't fine-grained**
   (`github_pat_`). A classic token reaches every repo the account owns.
 
-**Initialise is the one-time migration**, and it only ever fills a repo that has never held a
+**Initialize is the one-time migration**, and it only ever fills a repo that has never held a
 library. `HJSync.initialiseRepo` works through these steps:
 
 1. **Refuse unsafe targets.** It stops before reading further if the repo isn't private, holds
@@ -668,7 +679,7 @@ single-flight and runs at four points:
 - shortly after the app opens, or when a page opened in the background is first shown;
 - on the `online` event;
 - when the app comes back to the foreground after five minutes away;
-- from Pull now in Settings.
+- from Sync (or Pull) in Settings or the Library toolbar.
 
 Each pull goes through these steps:
 
@@ -776,7 +787,7 @@ logged; a repeat of the latest line updates that entry's time and count instead 
 **`INDEX.md` lets a person find a source without its id.** It is a table of every live source, newest
 first: each title links to its folder, followed by status, note count, type and date added.
 
-- **Writing it:** Initialise writes it, and every push includes it whenever its blob SHA differs from
+- **Writing it:** Initialize writes it, and every push includes it whenever its blob SHA differs from
   the repo's, so a pull that brought in an agent's new source is enough to refresh it.
 - **It carries no timestamp or device name,** so two devices with the same library write the same
   bytes and never take turns rewriting it.
@@ -792,7 +803,7 @@ first: each title links to its folder, followed by status, note count, type and 
    `deleted` alone). Sending it as is would erase them.
 2. **Skip what isn't new.** A file whose merge equals the repo's canonical copy is not sent. A source
    created and deleted here before it ever reached the repo sends nothing.
-3. **Write one commit** through `_commitFiles`, the same chunked writer Initialise uses, with
+3. **Write one commit** through `_commitFiles`, the same chunked writer Initialize uses, with
    `force: false`.
 4. **Retry if the branch moved.** GitHub answers 422; the whole round (pull, merge, push) runs again
    on top of the newer commit, up to three times. The log records "the repo moved during the sync".
@@ -827,7 +838,7 @@ allowed to read the expiry header. A revoked or expired token turns the dot red;
 locally and loses nothing, and the next sync after a new token is pasted sends what waited.
 
 **A button's result in Settings is replaced by the live status once a later pull reports.** Without
-this, a failed Pull now left its red box up after an automatic retry had already succeeded.
+this, a failed Pull left its red box up after an automatic retry had already succeeded.
 
 **Positions are stamped by sync, not as they change,** because they are written every second. Any
 position that differs from `sync_meta.positions` (the value last synced) is stamped "now" when a sync
@@ -862,7 +873,7 @@ allowed to read that header. Thrown errors carry a `userMessage` and never a hea
 
 **The repo's README is the agent contract** (`LIBRARY_REPO_README`). It covers the layout, the register
 format, how to add a source and set `copiedAt`, and the rules: never write `notes.json`, never delete
-files, and write with the file's `sha` and retry on conflict. Initialise writes it once; the app never
+files, and write with the file's `sha` and retry on conflict. Initialize writes it once; the app never
 merges it afterwards.
 
 **The token** lives in `localStorage` under `harkenjot_gh_token` only. It is never in `HJStore`, an
@@ -881,7 +892,7 @@ Keep the core free of DOM, storage and network calls so this keeps working.
 The GitHub client is tested the same way in Chromium, with Playwright routing `api.github.com` to an
 in-memory mock. The mock uses real git blob SHAs, flat trees, `base_tree` chaining and fast-forward-only
 ref updates. That covers the paths a real repo would otherwise be needed for: an empty repo, a public
-repo, the app's own repo, a second Initialise, a branch moving mid-upload, a revoked token and a
+repo, the app's own repo, a second Initialize, a branch moving mid-upload, a revoked token and a
 missing repo.
 
 The Phase 4 suite drives the real UI on two devices, both in Sync with read-and-write tokens. It
