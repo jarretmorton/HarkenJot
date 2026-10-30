@@ -650,14 +650,18 @@ Three rules the recorder follows:
 
 **Two guards are in place while a repo is configured:**
 
-- **Settings → Restore from backup refuses a full replace,** because sync would read the swap as deleting
-  the whole library. A single-source file still adds (the per-source Export that made them is gone since
-  v1.71.1, but older exports still read).
+- **Settings → Restore from backup is greyed out** (since v1.71.3), in every mode, because the recorder
+  runs from the moment a repo is set and a full replace would sync as deleting the whole library. The
+  note under it says to disconnect first. `restoreFromBackup` still refuses a full replace itself if it is
+  ever reached with a repo set; with none, it replaces the library or adds an older single-source file.
 - **Settings refuses the public app repo (`HarkenJot`) and any token that isn't fine-grained**
   (`github_pat_`). A classic token reaches every repo the account owns.
 
 **Initialize is the one-time migration**, and it only ever fills a repo that has never held a
-library. `HJSync.initialiseRepo` works through these steps:
+library. Its button is greyed out (since v1.71.3) once this device holds a `sync_meta` for the configured
+repo and branch — it initialized that repo or has pulled from it — because from then on it could only
+refuse; pointing Settings at another repo makes it available again. Greyed rather than hidden, so the
+help text that names it still matches what is on screen. `HJSync.initialiseRepo` works through these steps:
 
 1. **Refuse unsafe targets.** It stops before reading further if the repo isn't private, holds
    `HarkenJot.html` (the app's own repo), or already has `harkenjot.json` or a `sources/` folder.
