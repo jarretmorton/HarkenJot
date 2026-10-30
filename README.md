@@ -14,7 +14,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Gemini Notebook Integration** (formerly NotebookLM) — Play Gemini Notebook podcast exports as local audio, link them back to their notebook URL, and jump to Gemini Notebook from any article
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
-- **Library Management** — Browse, search, export, and import your notes and sources
+- **Library Management** — Browse, search and filter your sources, and copy the ones you pick — with their notes — to paste elsewhere
 - **Unloaded Links** — A link that fails to load is kept instead of lost. The library lists it with where the load gave up and a copyable report of the attempt, plus one-tap retry — worth trying, since most of these failures are free proxies and archives being temporarily unavailable rather than anything permanent
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
@@ -57,9 +57,9 @@ HarkenJot has three main views:
 |-----|---------|
 | **Reader** | Load articles, X.com posts/Articles or GitHub READMEs (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
 | **Media** | Play YouTube videos, podcasts (via a Spotify or Apple Podcasts episode link, RSS or an audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
-| **Library** | Browse all saved sources and notes. Search, edit, export/import as JSON, or copy notes to clipboard. |
+| **Library** | Browse all saved sources and notes. Search, filter by read status, pick sources to copy with their notes, and sync. |
 
-The **gear** in the header opens **Settings**: a one-tap library backup, and GitHub sync.
+The **gear** in the header opens **Settings**: library backup and restore, and GitHub sync.
 
 ## Tech Stack
 
@@ -125,7 +125,7 @@ The repository's `README.md` explains its layout to agents, and `INDEX.md` lists
 
 ## Data & Privacy
 
-All notes and sources are stored locally in the browser (IndexedDB, falling back to `localStorage`). With GitHub sync off, no library data is sent to any server. With it on, the library is also stored in the private GitHub repository you chose. The access token stays in that browser's local storage, and is never exported, synced or logged. You can export your full library as a JSON file for backup or transfer between browsers.
+All notes and sources are stored locally in the browser (IndexedDB, falling back to `localStorage`). With GitHub sync off, no library data is sent to any server. With it on, the library is also stored in the private GitHub repository you chose. The access token stays in that browser's local storage, and is never exported, synced or logged. Settings → Back up saves your full library as a JSON file, and Restore from backup reads one back in.
 
 ## License
 

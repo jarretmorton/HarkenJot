@@ -2486,16 +2486,146 @@
       display: flex;
       justify-content: flex-end;
       align-items: center;
-      gap: 0.3rem;
+      gap: 0.4rem;
       margin-bottom: 1rem;
       flex-shrink: 0;
       flex-wrap: nowrap;
     }
 
-    .library-actions .btn {
-      padding: 0.35rem 0.45rem;
-      font-size: 0.75rem;
+    /* Search · Filter · Copy · Sync share the row equally (capped, so a desktop
+       window doesn't stretch them into bars). While searching they shrink to
+       icon squares and the box takes the rest — every button stays in reach, so
+       a search can be filtered, copied or synced without closing it. One height
+       for buttons and box, so opening search moves nothing vertically. */
+    .library-actions .lib-btn,
+    .library-actions .lib-filter {
+      flex: 1 1 0;
+      min-width: 0;
+      max-width: 140px;
+    }
+
+    .library-actions .lib-filter > .lib-btn {
+      width: 100%;
+      max-width: none;
+    }
+
+    .library-actions .lib-btn {
+      justify-content: center;
+      height: 34px;
+      /* No padding: with a zero flex-basis, padding would count on top of each
+         button's share and the Filter wrapper (which has none) would come out
+         narrower. The content is centred anyway. */
+      padding: 0;
+      gap: 0.35rem;
+      font-size: 0.8rem;
       white-space: nowrap;
+      /* .btn transitions "all", which would slide the row's widths around when
+         search opens — the very bump this layout exists to avoid. */
+      transition: color 0.2s ease, background-color 0.2s ease;
+    }
+
+    .library-actions .lib-btn.active {
+      color: var(--accent);
+    }
+
+    .library-actions.searching .lib-btn,
+    .library-actions.searching .lib-filter {
+      flex: 0 0 34px;
+    }
+
+    .library-actions.searching .lib-btn-label {
+      display: none;
+    }
+
+    .library-search-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      height: 34px;
+      box-sizing: border-box;
+      padding: 0 0.6rem;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    .lib-btn.spinning svg {
+      animation: lib-spin 1s linear infinite;
+    }
+
+    @keyframes lib-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Selecting sources to copy: a round mark (the square box is read status),
+       and a bar along the bottom with the count and the actions. */
+    .library-item.selecting {
+      position: relative;
+      padding-left: 3rem;
+      /* Transparent to start from, so the selected outline fades in from
+         nothing rather than from the text colour. */
+      outline: 2px solid transparent;
+      outline-offset: -2px;
+    }
+
+    .library-item.selected {
+      outline-color: var(--accent);
+    }
+
+    .select-mark {
+      position: absolute;
+      left: 0.7rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: white;
+      color: white;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .library-item.selected .select-mark {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .select-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom));
+      background: white;
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -4px 16px var(--shadow);
+    }
+
+    .select-bar .btn {
+      padding: 0.45rem 0.7rem;
+      white-space: nowrap;
+    }
+
+    .backup-actions .btn {
+      flex: 1 1 auto;
+      justify-content: center;
+    }
+
+    .select-bar-count {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
     }
 
     .filter-menu {
@@ -2564,7 +2694,12 @@
       }
 
       .library-actions {
-        justify-content: center;
+        justify-content: stretch;
+      }
+
+      .library-actions .lib-btn,
+      .library-actions .lib-filter {
+        max-width: none;
       }
 
       .logo-text {
@@ -2781,6 +2916,7 @@
       Chevron: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
       Settings: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
       Filter: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
+      Sync: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>,
       Image: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>,
       NotebookLM: ({size = 16} = {}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><path d="M11.999 3.201C5.372 3.201 0 8.528 0 15.101V20.8h2.212v-.568c0-2.666 2.178-4.827 4.866-4.827 2.688 0 4.866 2.16 4.866 4.827v.568h2.212v-.568c0-3.877-3.17-7.019-7.078-7.019A7.075 7.075 0 0 0 2.992 14.5a7.355 7.355 0 0 1 6.568-4.016c4.057 0 7.347 3.264 7.347 7.287V20.8h2.212V17.77c0-5.235-4.28-9.481-9.56-9.481a9.563 9.563 0 0 0-6.217 2.28A9.795 9.795 0 0 1 12 5.393c5.406 0 9.788 4.346 9.788 9.707V20.8H24V15.1c-.001-6.573-5.373-11.9-12.001-11.9Z"/></svg>,
       XLogo: ({size = 20} = {}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.259 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>,
@@ -2789,7 +2925,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.70.1';
+    const APP_VERSION = '1.71.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -5271,8 +5407,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 \`deleted.value\` not \`true\`. After copying one, set \`copiedAt\` as in rule 3.
 `;
 
-    // Download the whole library as JSON — the Library's "Export All", and the
-    // backup Settings takes before sync is pointed at a repo. `tag` lands in the
+    // Download the whole library as JSON — Settings → Back up, and the backup
+    // Settings takes before sync is pointed at a repo. `tag` lands in the
     // filename so a pre-sync backup can't be mistaken for a routine one.
     const downloadLibraryBackup = ({ sources, notes, failedLinks }, tag = '') => {
       // Include saved positions for articles/PDFs and media
@@ -6403,7 +6539,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           // where a download lands somewhere it can be kept.
           const last = Date.parse(HJSync.lastBackupAt() || '') || 0;
           if (!/android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent) && Date.now() - last > 7 * 24 * 3600e3) {
-            setTimeout(() => showToast('No library backup on this device for over a week — Settings → Back up now.'), 4000);
+            setTimeout(() => showToast('No library backup on this device for over a week — Settings → Back up.'), 4000);
           }
           // GitHub reports a fine-grained token's expiry when the browser may
           // read that header; two weeks out is the time to make a new one.
@@ -6929,10 +7065,11 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   deleteSource={deleteSource}
                   moveSourceToToday={moveSourceToToday}
                   updateSource={updateSource}
-                  setSources={setSources}
-                  setNotes={setNotes}
                   showToast={showToast}
                   activeTab={activeTab}
+                  syncMode={HJSync.isConfigured() && HJSync.hasToken() ? (HJSync.getConfig().mode || 'off') : 'off'}
+                  syncStatus={syncStatus}
+                  runSync={runSync}
                 />
               </div>
               {/* Mounted only while open: it hashes the library for its
@@ -6943,6 +7080,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                     sources={sources}
                     notes={notes}
                     failedLinks={failedLinks}
+                    setSources={setSources}
+                    setNotes={setNotes}
+                    setFailedLinks={setFailedLinks}
                     showToast={showToast}
                     runSync={runSync}
                     syncStatus={syncStatus}
@@ -14976,7 +15116,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     };
 
     // Settings — per-device: none of it is synced or exported.
-    function SettingsView({ sources, notes, failedLinks, showToast, runSync, syncStatus }) {
+    function SettingsView({ sources, notes, failedLinks, setSources, setNotes, setFailedLinks, showToast, runSync, syncStatus }) {
       const [config, setConfig] = useState(() => HJSync.getConfig());
       const [repoInput, setRepoInput] = useState(config ? `${config.owner}/${config.repo}` : '');
       const [branch, setBranch] = useState(config?.branch || 'main');
@@ -14999,6 +15139,95 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const backupNow = (tag) => {
         downloadLibraryBackup({ sources, notes, failedLinks }, tag);
         setLastBackup(HJSync.lastBackupAt());
+      };
+
+      // Replaces the whole library from a backup file, or adds one source from a
+      // single-source export. Moved here from the Library's Import All: it is
+      // rare and deliberate, and while a repo is set the full replace is refused.
+      const restoreFromBackup = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            try {
+              const data = JSON.parse(event.target.result);
+
+              if (!data.sources || !data.notes) {
+                showToast('Invalid library file');
+                return;
+              }
+
+              // Check if this is a single-source export (additive import)
+              if (data.exportType === 'single-source') {
+                const sourceTitle = data.sources[0]?.title || 'source';
+                if (!confirm(`Add "${sourceTitle}" and ${data.notes.length} notes to your library? This will not overwrite existing items.`)) {
+                  return;
+                }
+
+                // Additive import: merge with existing data
+                const now = new Date().toISOString();
+                setSources(prevSources => {
+                  // Check if source already exists (by id)
+                  const existingIds = new Set(prevSources.map(s => s.id));
+                  // Update addedAt to current date so imports appear at top of library
+                  const newSources = data.sources
+                    .filter(s => !existingIds.has(s.id))
+                    .map(s => ({ ...s, addedAt: now }));
+                  return [...newSources, ...prevSources];
+                });
+
+                setNotes(prevNotes => {
+                  // Check if notes already exist (by id)
+                  const existingIds = new Set(prevNotes.map(n => n.id));
+                  const newNotes = data.notes.filter(n => !existingIds.has(n.id));
+                  return [...prevNotes, ...newNotes];
+                });
+
+                const addedSources = data.sources.length;
+                const addedNotes = data.notes.length;
+                showToast(`Added ${addedSources} source${addedSources !== 1 ? 's' : ''} and ${addedNotes} note${addedNotes !== 1 ? 's' : ''} to library`);
+              } else {
+                // Full library import (replaces everything). Not while a sync
+                // repo is set: sync would read the swap as every current source
+                // and note being deleted, and push those deletions everywhere.
+                if (HJSync.isConfigured()) {
+                  alert('A full restore is turned off while a sync repo is set up, because replacing the library would sync as deleting everything in it.\n\nSingle-source files still work. To replace the whole library, disconnect the repo below first.');
+                  return;
+                }
+                if (!confirm(`Import ${data.sources.length} sources and ${data.notes.length} notes? This will replace your current library.`)) {
+                  return;
+                }
+
+                setSources(data.sources);
+                setNotes(data.notes);
+                // Absent in a pre-v1.59 export, and in a single-source one. Leave
+                // the current list alone rather than clearing it in that case.
+                if (Array.isArray(data.failedLinks)) setFailedLinks(data.failedLinks);
+
+                // Restore saved positions if available (version 2+)
+                if (data.positions) {
+                  if (data.positions.reader) {
+                    HJStore.set('positions', data.positions.reader).catch(() => {});
+                  }
+                  if (data.positions.media) {
+                    HJStore.set('media_positions', data.positions.media).catch(() => {});
+                  }
+                }
+
+                showToast(`Imported ${data.sources.length} sources and ${data.notes.length} notes`);
+              }
+            } catch (err) {
+              showToast('Failed to import library');
+            }
+          };
+          reader.readAsText(file);
+        };
+        input.click();
       };
 
       const handleSave = () => {
@@ -15149,13 +15378,21 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           <section className="settings-card">
             <h2>Library backup</h2>
             <p className="settings-help">
-              Downloads the whole library as one JSON file — the same file as Library → Export All.
+              Back up downloads the whole library as one JSON file. Restore from backup reads one back in.
             </p>
-            <div className="settings-actions">
+            <div className="settings-actions backup-actions">
               <button className="btn btn-secondary" onClick={() => backupNow()}>
-                <Icons.FolderUp /> Back up now
+                <Icons.FolderUp /> Back up
+              </button>
+              <button className="btn btn-secondary" onClick={restoreFromBackup}>
+                <Icons.FolderDown /> Restore from backup
               </button>
             </div>
+            {config && (
+              <p className="settings-meta">
+                While sync is set up, a full restore is off — it would sync as deleting your library. A single-source file (from a source’s Export button) can still be added.
+              </p>
+            )}
             <p className="settings-meta">
               Last backup on this device: {lastBackup ? new Date(lastBackup).toLocaleString() : 'never'}
             </p>
@@ -15257,7 +15494,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             </div>
             {config && (
               <p className="settings-meta">
-                Set up for <strong>{config.owner}/{config.repo}</strong> ({config.branch}) as “{config.device}”. Local changes are being recorded for sync; Import All is off while a repo is set.
+                Set up for <strong>{config.owner}/{config.repo}</strong> ({config.branch}) as “{config.device}”. Local changes are being recorded for sync; a full restore is off while a repo is set.
                 {config.tokenExpires && <> Token expires {(() => {
                   // GitHub writes "2026-11-27 12:00:00 UTC", which not every browser's Date parses.
                   const d = new Date(config.tokenExpires.replace(' UTC', 'Z').replace(' ', 'T'));
@@ -15323,7 +15560,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     }
 
     // Library View Component
-    function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, setSources, setNotes, showToast, activeTab }) {
+    function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, showToast, activeTab, syncMode, syncStatus, runSync }) {
       const [searchQuery, setSearchQuery] = React.useState('');
       const [searchOpen, setSearchOpen] = React.useState(false);
       const searchInputRef = React.useRef(null);
@@ -15338,6 +15575,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const filterRef = React.useRef(null);
       // Source pending a delete-or-move-to-today decision (recycle bin button)
       const [actionSource, setActionSource] = React.useState(null);
+      // Choosing sources to copy (see copySelected).
+      const [selecting, setSelecting] = React.useState(false);
+      const [selectedIds, setSelectedIds] = React.useState(() => new Set());
 
       // LibraryView stays mounted when tabs switch (hidden via display:none),
       // so clear the filter explicitly whenever the user leaves the library tab
@@ -15410,193 +15650,134 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         return new Date(a.createdAt) - new Date(b.createdAt);
       });
 
-      const exportToOneNote = () => {
+      // The clipboard text for a set of sources, in the order the library shows
+      // them. Each source becomes one paragraph (so one bullet when pasted); its
+      // own lines are soft breaks within that paragraph.
+      const formatForCopy = (chosen) => {
         const getFirstThreeWords = (text) => {
           if (!text) return '';
           const words = text.trim().split(/\s+/).slice(0, 3);
           return words.join(' ');
         };
 
-        // Each source becomes one paragraph (so one bullet when pasted); its own
-        // lines are soft breaks within that paragraph.
-        const blocks = [];
+        return chosen.map(source => {
+          const sourceNotes = getNotesForSource(source.id);
+          const lines = [formatSourceHeader(source)];
 
-        Object.entries(groupedSources).forEach(([date, dateSources]) => {
-          dateSources.forEach(source => {
-            const sourceNotes = getNotesForSource(source.id);
-            const lines = [formatSourceHeader(source)];
+          if (sourceNotes.length > 0) {
+            lines.push('Notes:');
+            sourceNotes.forEach(note => {
+              let notePrefix = '';
+              if (note.timestamp !== undefined) {
+                notePrefix = `[${formatTime(note.timestamp)}] `;
+              } else if (note.position !== undefined && note.context) {
+                const sentenceLabel = note.fullSentenceCaptured
+                  ? `"${note.context}"`
+                  : `"${getFirstThreeWords(note.context)}..."`;
+                notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
+              }
+              lines.push(`- ${notePrefix}${note.text}`);
+            });
+          }
 
-            if (sourceNotes.length > 0) {
-              lines.push('Notes:');
-              sourceNotes.forEach(note => {
-                let notePrefix = '';
-                if (note.timestamp !== undefined) {
-                  notePrefix = `[${formatTime(note.timestamp)}] `;
-                } else if (note.position !== undefined && note.context) {
-                  const sentenceLabel = note.fullSentenceCaptured
-                    ? `"${note.context}"`
-                    : `"${getFirstThreeWords(note.context)}..."`;
-                  notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
-                }
-                lines.push(`- ${notePrefix}${note.text}`);
-              });
-            }
+          return lines.join(SOFT_BREAK);
+        }).join('\n');
+      };
 
-            blocks.push(lines.join(SOFT_BREAK));
-          });
+      // Copy picks sources rather than taking the whole library. Search and the
+      // status filter keep working while selecting, so "Select all" can take
+      // exactly what a search, a filter or both have narrowed the list to. The
+      // view stays mounted across tabs, so a selection lasts until it is copied
+      // or cancelled.
+      const shownIds = Object.values(groupedSources).flat().map(s => s.id);
+      const selectedCount = sources.reduce((n, s) => n + (selectedIds.has(s.id) ? 1 : 0), 0);
+      const allShownSelected = shownIds.length > 0 && shownIds.every(id => selectedIds.has(id));
+
+      const toggleSelecting = () => {
+        if (selecting) { setSelecting(false); setSelectedIds(new Set()); }
+        else setSelecting(true);
+      };
+
+      const toggleSelected = (id) => {
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id); else next.add(id);
+          return next;
         });
-
-        navigator.clipboard.writeText(blocks.join('\n'));
       };
 
-      const exportLibrary = () => {
-        downloadLibraryBackup({ sources, notes, failedLinks });
-        showToast('Library exported');
+      const selectAllShown = () => {
+        setSelectedIds(prev => new Set([...prev, ...shownIds]));
       };
 
-      const importLibrary = () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = (e) => {
-          const file = e.target.files[0];
-          if (!file) return;
+      const copySelected = async () => {
+        // Library order, whatever order they were tapped in.
+        const chosen = Object.values(sources.filter(s => selectedIds.has(s.id)).reduce((acc, source) => {
+          const date = new Date(source.createdAt).toDateString();
+          (acc[date] = acc[date] || []).push(source);
+          return acc;
+        }, {})).flat();
+        if (!chosen.length) return;
+        try {
+          await navigator.clipboard.writeText(formatForCopy(chosen));
+        } catch (e) {
+          showToast("Couldn't copy — the browser blocked the clipboard");
+          return;
+        }
+        const noteCount = chosen.reduce((n, s) => n + getNotesForSource(s.id).length, 0);
+        showToast(`Copied ${chosen.length} source${chosen.length !== 1 ? 's' : ''} and ${noteCount} note${noteCount !== 1 ? 's' : ''}`);
+        setSelecting(false);
+        setSelectedIds(new Set());
+      };
 
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            try {
-              const data = JSON.parse(event.target.result);
-
-              if (!data.sources || !data.notes) {
-                showToast('Invalid library file');
-                return;
-              }
-
-              // Check if this is a single-source export (additive import)
-              if (data.exportType === 'single-source') {
-                const sourceTitle = data.sources[0]?.title || 'source';
-                if (!confirm(`Add "${sourceTitle}" and ${data.notes.length} notes to your library? This will not overwrite existing items.`)) {
-                  return;
-                }
-
-                // Additive import: merge with existing data
-                const now = new Date().toISOString();
-                setSources(prevSources => {
-                  // Check if source already exists (by id)
-                  const existingIds = new Set(prevSources.map(s => s.id));
-                  // Update addedAt to current date so imports appear at top of library
-                  const newSources = data.sources
-                    .filter(s => !existingIds.has(s.id))
-                    .map(s => ({ ...s, addedAt: now }));
-                  return [...newSources, ...prevSources];
-                });
-
-                setNotes(prevNotes => {
-                  // Check if notes already exist (by id)
-                  const existingIds = new Set(prevNotes.map(n => n.id));
-                  const newNotes = data.notes.filter(n => !existingIds.has(n.id));
-                  return [...prevNotes, ...newNotes];
-                });
-
-                const addedSources = data.sources.length;
-                const addedNotes = data.notes.length;
-                showToast(`Added ${addedSources} source${addedSources !== 1 ? 's' : ''} and ${addedNotes} note${addedNotes !== 1 ? 's' : ''} to library`);
-              } else {
-                // Full library import (replaces everything). Not while a sync
-                // repo is set: sync would read the swap as every current source
-                // and note being deleted, and push those deletions everywhere.
-                if (HJSync.isConfigured()) {
-                  alert('Import All is turned off while a sync repo is set up, because replacing the library would sync as deleting everything in it.\n\nSingle-source imports still work. To replace the whole library, disconnect the repo in Settings first.');
-                  return;
-                }
-                if (!confirm(`Import ${data.sources.length} sources and ${data.notes.length} notes? This will replace your current library.`)) {
-                  return;
-                }
-
-                setSources(data.sources);
-                setNotes(data.notes);
-                // Absent in a pre-v1.59 export, and in a single-source one. Leave
-                // the current list alone rather than clearing it in that case.
-                if (Array.isArray(data.failedLinks)) setFailedLinks(data.failedLinks);
-
-                // Restore saved positions if available (version 2+)
-                if (data.positions) {
-                  if (data.positions.reader) {
-                    HJStore.set('positions', data.positions.reader).catch(() => {});
-                  }
-                  if (data.positions.media) {
-                    HJStore.set('media_positions', data.positions.media).catch(() => {});
-                  }
-                }
-
-                showToast(`Imported ${data.sources.length} sources and ${data.notes.length} notes`);
-              }
-            } catch (err) {
-              showToast('Failed to import library');
-            }
-          };
-          reader.readAsText(file);
-        };
-        input.click();
+      // The same sync the gear's status reports on, from where the library is
+      // read: a search or a selection in progress stays as it is.
+      const syncing = syncStatus && syncStatus.state === 'syncing';
+      const handleSync = async () => {
+        if (syncing) return;
+        const r = await runSync();
+        if (!r) return;
+        if (r.needsConfirm) showToast('Deletions are waiting for a yes — open Settings to send or undo them');
+        else if (r.error) showToast(r.error);
+        else if (r.offline) showToast('Offline — it will retry when the connection is back');
+        else if (r.message) showToast(r.message);
       };
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <div className="library-actions">
+          <div className={`library-actions${searchOpen ? ' searching' : ''}`}>
             <button
-              className={`btn btn-secondary${searchOpen ? ' active' : ''}`}
+              className={`btn btn-secondary lib-btn${searchOpen ? ' active' : ''}`}
               onClick={toggleSearch}
               title={searchOpen ? 'Close search' : 'Search library'}
               aria-label={searchOpen ? 'Close search' : 'Search library'}
-              style={searchOpen ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
             >
-              {/* An X while open: Copy/Import/Export are hidden then, and an orange
-                  magnifier didn't read as the way back out. Not a magnifier-with-X —
-                  that glyph conventionally means "no results". */}
+              {/* An X while open: an orange magnifier didn't read as the way back
+                  out. Not a magnifier-with-X — that glyph conventionally means
+                  "no results". */}
               {searchOpen ? <Icons.X /> : <Icons.Search />}
+              <span className="lib-btn-label">Search</span>
             </button>
             {searchOpen && (
               <input
                 ref={searchInputRef}
+                className="library-search-input"
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={e => e.key === 'Escape' && toggleSearch()}
                 placeholder="Search titles & notes…"
-                style={{
-                  flex: '1 1 160px',
-                  minWidth: 0,
-                  padding: '0.4rem 0.6rem',
-                  border: '1px solid var(--border)',
-                  borderRadius: '6px',
-                  background: 'var(--bg-secondary)',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.85rem',
-                  outline: 'none',
-                }}
               />
             )}
-            {!searchOpen && (
-              <React.Fragment>
-                <button className="btn btn-secondary" onClick={exportToOneNote}>
-                  <Icons.Copy /> Copy All
-                </button>
-                <button className="btn btn-secondary" onClick={importLibrary} title="Import Library">
-                  <Icons.FolderDown /> Import All
-                </button>
-                <button className="btn btn-secondary" onClick={exportLibrary} title="Export Library">
-                  <Icons.FolderUp /> Export All
-                </button>
-              </React.Fragment>
-            )}
-            <div ref={filterRef} style={{ position: 'relative', flexShrink: 0 }}>
+            <div ref={filterRef} className="lib-filter" style={{ position: 'relative' }}>
               <button
-                className="btn btn-secondary"
+                className={`btn btn-secondary lib-btn${statusFilter.length || filterOpen ? ' active' : ''}`}
                 onClick={() => setFilterOpen(open => !open)}
                 title="Filter by read status"
-                style={statusFilter.length || filterOpen ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : {}}
+                aria-label="Filter by read status"
               >
                 <Icons.Filter />
+                <span className="lib-btn-label">Filter</span>
               </button>
               {filterOpen && (
                 <div className="filter-menu">
@@ -15621,6 +15802,28 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 </div>
               )}
             </div>
+            <button
+              className={`btn btn-secondary lib-btn${selecting ? ' active' : ''}`}
+              onClick={toggleSelecting}
+              title={selecting ? 'Stop selecting' : 'Select sources to copy'}
+              aria-label={selecting ? 'Stop selecting' : 'Select sources to copy'}
+              aria-pressed={selecting}
+            >
+              <Icons.Copy />
+              <span className="lib-btn-label">Copy</span>
+            </button>
+            {syncMode !== 'off' && (
+              <button
+                className={`btn btn-secondary lib-btn${syncing ? ' active spinning' : ''}`}
+                onClick={handleSync}
+                disabled={syncing}
+                title={syncMode === 'pull' ? 'Pull changes from the repo' : 'Sync with the repo'}
+                aria-label={syncMode === 'pull' ? 'Pull' : 'Sync'}
+              >
+                <Icons.Sync />
+                <span className="lib-btn-label">{syncMode === 'pull' ? 'Pull' : 'Sync'}</span>
+              </button>
+            )}
           </div>
 
           {failedLinks && failedLinks.length > 0 && (
@@ -15704,16 +15907,23 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               <p>{searchQuery.trim() ? `No sources or notes match "${searchQuery}".` : 'No sources match the selected status filter.'}</p>
             </div>
           ) : (
-            <div className="library-grid" style={{ flex: 1, overflow: 'auto' }}>
+            <div className="library-grid" style={{ flex: 1, overflow: 'auto', paddingBottom: selecting ? '5rem' : undefined }}>
               {Object.entries(groupedSources).map(([date, dateSources]) => (
                 <div key={date} className="library-date-group">
                   <div className="date-header">{formatDate(new Date(date))}</div>
                   {dateSources.map(source => (
                     <div
                       key={source.id}
-                      className="library-item"
-                      onClick={() => setCurrentSource(source)}
+                      className={`library-item${selecting ? ' selecting' : ''}${selecting && selectedIds.has(source.id) ? ' selected' : ''}`}
+                      onClick={() => selecting ? toggleSelected(source.id) : setCurrentSource(source)}
+                      role={selecting ? 'checkbox' : undefined}
+                      aria-checked={selecting ? selectedIds.has(source.id) : undefined}
                     >
+                      {selecting && (
+                        <span className="select-mark" aria-hidden="true">
+                          {selectedIds.has(source.id) && <Icons.Check />}
+                        </span>
+                      )}
                       <div className="library-item-top">
                         <div className="library-item-title">{source.title}</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
@@ -15740,16 +15950,18 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                           >
                             {getNotesForSource(source.id).length}× <Icons.Pencil />
                           </div>
-                          <button
-                            className="note-action-btn delete"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActionSource(source);
-                            }}
-                            title="Delete or move to today"
-                          >
-                            <Icons.Recycle />
-                          </button>
+                          {!selecting && (
+                            <button
+                              className="note-action-btn delete"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActionSource(source);
+                              }}
+                              title="Delete or move to today"
+                            >
+                              <Icons.Recycle />
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="library-item-meta">
@@ -15765,6 +15977,21 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   ))}
                 </div>
               ))}
+            </div>
+          )}
+
+          {selecting && (
+            <div className="select-bar" role="toolbar" aria-label="Copy selected sources">
+              <button className="btn btn-secondary" onClick={toggleSelecting}>Cancel</button>
+              <span className="select-bar-count">{selectedCount} selected</span>
+              {allShownSelected ? (
+                <button className="btn btn-secondary" onClick={() => setSelectedIds(new Set())}>Clear</button>
+              ) : (
+                <button className="btn btn-secondary" onClick={selectAllShown} disabled={!shownIds.length}>Select all {shownIds.length}</button>
+              )}
+              <button className="btn btn-primary" onClick={copySelected} disabled={!selectedCount}>
+                Copy{selectedCount ? ` ${selectedCount}` : ''}
+              </button>
             </div>
           )}
 
