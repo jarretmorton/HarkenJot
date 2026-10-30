@@ -1259,6 +1259,22 @@ the length and the first 140 characters, and runs `tryExtractArticle` over the b
 in case the origin handed back the article as a page (a bot wall is rejected there
 anyway). Any new tier that rejects a body it did fetch should name what it saw.
 
+Two more places used to drop a response without a line, and both hid HPCwire's
+failures (v1.71.2):
+
+- **`tryExtractArticle(html, label)`** logs a fetched body that yields under 100
+  chars of text: the route, the HTML size, and the page's title. HPCwire's page and
+  AMP fetches "succeeded" at 6 KB and then vanished; the title is what says whether
+  that was a JS shell or a challenge page. Pass a label from any call site that
+  fetched the HTML itself; the call sites that wrap API HTML pass none, since their
+  callers already log the miss.
+- **`fetchJsonpViaNullOriginFrame(buildUrl, ms, label)`** logs a miss as one of three
+  outcomes: the script was **refused** (a 4xx/5xx, *or* an HTML bot check, which
+  Chrome will not run as a script, so it fires `onerror`), it **loaded but never
+  called back** (JSONP disabled, so plain JSON came back), or **no reply** before the
+  timeout (a WAF holding the request). `onload` fires after the script has run, so a
+  real callback always posts first and wins.
+
 **Route the proxied GraphQL call through `fetchHtmlViaProxies`, never a bare
 `fetch` loop.** A proxy will forward a compressed body without the matching
 `Content-Encoding` header, so `response.text()` hands back binary and `JSON.parse`

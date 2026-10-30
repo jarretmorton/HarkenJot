@@ -2901,7 +2901,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.71.1';
+    const APP_VERSION = '1.71.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3327,19 +3327,42 @@
     // filled in. Resolves null on a load error, a non-JSONP body (a plain JSON
     // response parses as a harmless expression and simply never calls back), or
     // the timeout.
-    const fetchJsonpViaNullOriginFrame = (buildUrl, ms = 8000) => {
+    //
+    // With a `label`, a miss is logged as one of those three, because they point
+    // different ways: a load error is the request refused — a 4xx/5xx, or an
+    // HTML challenge page, which Chrome will not run as a script — "loaded, never
+    // called back" is JSONP disabled (plain JSON comes back), and a timeout is a
+    // WAF holding the request open.
+    // HPCwire's JSONP misses all resolved null without a line, which left the
+    // trace unable to say which of the three it was.
+    const JSONP_LOAD_ERROR = '\u0000hj:error';
+    const JSONP_NO_CALLBACK = '\u0000hj:nocallback';
+    const fetchJsonpViaNullOriginFrame = (buildUrl, ms = 8000, label = null) => {
       const cb = 'hjcb' + Math.random().toString(36).slice(2);
       let src;
       try { src = buildUrl(cb); } catch (e) { return Promise.resolve(null); }
+      // onload fires after the script has run, so a callback the script made has
+      // already posted its message and wins; only a script that never called back
+      // reaches the no-callback send.
       return runInNullOriginFrame(
         'window[' + JSON.stringify(cb) + ']=function(d){' +
         'try{send(JSON.stringify(d));}catch(e){send(null);}};' +
         'var s=document.createElement("script");' +
         's.src=' + JSON.stringify(src) + ';' +
-        's.onerror=function(){send(null);};' +
+        's.onerror=function(){send(' + JSON.stringify(JSONP_LOAD_ERROR) + ');};' +
+        's.onload=function(){send(' + JSON.stringify(JSONP_NO_CALLBACK) + ');};' +
         'document.head.appendChild(s);',
         ms
-      );
+      ).then((body) => {
+        if (body !== null && body !== JSONP_LOAD_ERROR && body !== JSONP_NO_CALLBACK) return body;
+        if (label) {
+          const why = body === JSONP_LOAD_ERROR ? 'script refused (a 4xx/5xx, or an HTML page such as a bot check)'
+            : body === JSONP_NO_CALLBACK ? 'script loaded but never called back (JSONP off, or not JSONP)'
+            : `no reply in ${ms / 1000}s`;
+          console.log(`[HJ:net] JSONP ${label} → ${src.replace(/[?&]_jsonp=[^&]*/, '')}: ${why}`);
+        }
+        return null;
+      });
     };
 
     // Small cross-session memory for network routing: which CORS proxy last worked per host,
@@ -8846,14 +8869,26 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           };
 
           // Helper: try to extract article content from HTML, returns null if insufficient
-          const tryExtractArticle = (html) => {
+          // `label` names the route the HTML came from, so a rejection can be read
+          // in a trace where several tiers' lines interleave.
+          const tryExtractArticle = (html, label) => {
             if (!html) return null;
             const result = extractArticleContent(html);
-            if (result.text.length < 100) return null;
+            if (result.text.length < 100) {
+              // Say what came back. A proxy logs "succeeded" for any body over 100
+              // chars, so a JS shell or a challenge page with almost no text used to
+              // vanish here without a line — HPCwire's 6 KB "successes" left a trace
+              // that never said what they were.
+              if (label) {
+                console.log(`[HJ:article] ${label}: no article text in ${html.length} chars of HTML` +
+                  ` (${result.text.length} chars of text, title "${(result.title || '').slice(0, 80)}")`);
+              }
+              return null;
+            }
             // A WAF challenge page is a 200 with plenty of text on it. Banking one
             // saves the bot wall as the article body and skips every fallback.
             if (looksLikeBlockedPage(result.text) || looksLikeBlockedPage(result.title)) {
-              console.log('[HJ:article] extraction rejected: bot-check / access-denied page');
+              console.log(`[HJ:article] extraction rejected: bot-check / access-denied page${label ? ` (${label})` : ''}`);
               return null;
             }
             return result;
@@ -8915,7 +8950,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               let liveRoot = null;
               const replies = await Promise.all(roots.map(async (root) => ({
                 root,
-                body: await fetchJsonpViaNullOriginFrame((cb) => `${postsUrl(root)}&_jsonp=${cb}`)
+                body: await fetchJsonpViaNullOriginFrame((cb) => `${postsUrl(root)}&_jsonp=${cb}`, 8000, 'WordPress posts')
               })));
               for (const { root, body } of replies) {
                 if (!body) continue;
@@ -8942,7 +8977,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               if (!raw && liveRoot) {
                 const searchUrl = `${liveRoot}/wp-json/wp/v2/search?search=${encodeURIComponent(slug.replace(/-/g, ' '))}` +
                   `&subtype=any&per_page=20&_fields=id,url,type,subtype`;
-                const found = await fetchJsonpViaNullOriginFrame((cb) => `${searchUrl}&_jsonp=${cb}`);
+                const found = await fetchJsonpViaNullOriginFrame((cb) => `${searchUrl}&_jsonp=${cb}`, 8000, 'WordPress search');
                 let hit = null;
                 if (found) {
                   try {
@@ -8961,7 +8996,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 if (hit && hit.id && hit.subtype) {
                   console.log('[HJ:article] WordPress search located the post', { id: hit.id, type: hit.subtype });
                   const byId = `${liveRoot}/wp-json/wp/v2/${encodeURIComponent(hit.subtype)}/${hit.id}?_fields=title,content,link`;
-                  const body = await fetchJsonpViaNullOriginFrame((cb) => `${byId}&_jsonp=${cb}`);
+                  const body = await fetchJsonpViaNullOriginFrame((cb) => `${byId}&_jsonp=${cb}`, 8000, 'WordPress post by id');
                   let parsed;
                   try { parsed = body ? JSON.parse(body) : null; } catch (e) { parsed = null; }
                   if (postIn(parsed)) {
@@ -9179,7 +9214,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   console.log(`[HJ:article] Wayback: http ${response.status}`);
                   continue;
                 }
-                const result = tryExtractArticle(await response.text());
+                const result = tryExtractArticle(await response.text(), `Wayback ${candidate}`);
                 if (result) return result;
               } catch (e) {
                 console.log(`[HJ:article] Wayback failed (${candidate}):`, e.message);
@@ -9196,7 +9231,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             const proxiedCandidate = timestamps.length
               ? `https://web.archive.org/web/${timestamps[0]}id_/${target}`
               : `https://web.archive.org/web/2/${target}`;
-            const proxied = tryExtractArticle(await fetchHtmlViaProxies(proxiedCandidate, { timeoutMs: 15000 }));
+            const proxied = tryExtractArticle(await fetchHtmlViaProxies(proxiedCandidate, { timeoutMs: 15000 }), `Wayback via proxy ${proxiedCandidate}`);
             if (proxied) {
               console.log('[HJ:article] Wayback via proxy chain', { chars: proxied.text.length });
               return proxied;
@@ -9229,7 +9264,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               try {
                 console.log(`Trying ${host}...`);
                 const html = await fetchHtmlViaProxies(`https://${host}/newest/${target}`, { timeoutMs: 15000 });
-                const result = tryExtractArticle(html);
+                const result = tryExtractArticle(html, `${host} snapshot`);
                 if (result && result.text.length >= 300) {
                   console.log('[HJ:article] archive.today success', { host, chars: result.text.length });
                   return result;
@@ -9843,7 +9878,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             }
           }
 
-          let extracted = tryExtractArticle(html);
+          let extracted = tryExtractArticle(html, `page ${url}`);
 
           // Remember whether the chain was worth walking, so the next article from
           // this publisher starts the working routes immediately instead of
@@ -9922,7 +9957,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               }
             })();
             const ampP = (ampUrl !== url)
-              ? fetchHtmlViaProxies(ampUrl).then(tryExtractArticle).catch(() => null)
+              ? fetchHtmlViaProxies(ampUrl).then((h) => tryExtractArticle(h, `AMP ${ampUrl}`)).catch(() => null)
               : Promise.resolve(null);
 
             // Strategy 4: WordPress REST API. Many article sites are WordPress;
