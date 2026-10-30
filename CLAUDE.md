@@ -165,7 +165,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 4111–4462 | `HJSync` — per-device sync settings, the token, the local change recorder (`sync_clock`), and the GitHub client (`checkConnection`, `initialiseRepo`) |
 | 4463–4886 | `HJSync` pull — `pull` / `_pullOnce` / `_applyPulled`, the status and log, `patchSources` / `patchNotes` |
 | 4887–4945 | `LIBRARY_REPO_README` — the library repo's README: the contract for agents |
-| 4946–4981 | `downloadLibraryBackup` — the library JSON export, shared by Library → Export All and Settings |
+| 4946–4981 | `downloadLibraryBackup` — the library JSON export behind Settings → Back up |
 | 5089–5468 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
 | 5469–5608 | `Toast` — Notification component with undo support |
 | 5609–5817 | `MediaSessionManager` — Browser Media Session API integration |
@@ -174,8 +174,8 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 6701–7209 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
 | 7210–10668 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
 | 10669–14367 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 14368–14695 | `SettingsView` — Library backup, sync settings and mode, and the Repository card (Pull now / Check connection / Initialise, sync log) |
-| 14696–15165 | `LibraryView` — Source and note management, the **Unloaded links** panel, import/export |
+| 14368–14695 | `SettingsView` — Library backup and Restore from backup, sync settings and mode, and the Repository card (Pull now / Check connection / Initialise, sync log) |
+| 14696–15165 | `LibraryView` — Source and note management, the toolbar (Search · Filter · Copy · Sync), copy selection, the **Unloaded links** panel |
 | 15166–15370 | `NoteSidebar` — Notes display, editing, and navigation |
 | 15372 | `ReactDOM.createRoot` render call |
 
@@ -464,6 +464,28 @@ link that failed to load** for what `stage` and `trace` carry.
 - Speech recognition falls back from Web Speech API to Whisper
 - User-facing errors shown via the `Toast` component
 
+### Library toolbar and copying
+
+The Library's toolbar is **Search · Filter · Copy · Sync** (Sync only while a sync mode is on; it reads
+**Pull** in Pull-only). On a phone the buttons share the row equally; on desktop they are capped at
+140px and right-aligned. Opening search shrinks every button to a 34px icon and gives the box the rest
+of the row, at the buttons' height, so nothing moves and Filter, Copy and Sync stay usable mid-search.
+Two CSS details hold that together: the buttons have **no padding** (with a zero flex-basis, padding
+would count on top of each share and the Filter wrapper, which has none, would come out narrower), and
+they transition **colour only** — `.btn`'s `transition: all` would slide the widths when search opens.
+
+**Copy picks sources rather than taking the library.** The old Copy All copied every source and
+nobody used it. Copy now starts a selection: a round mark per card (the square box is read status),
+a tap selects instead of opening, delete is hidden, and a bottom bar carries the count, **Select all N**
+(N = what search and the filter currently show, so a search, a filter or both can be taken whole) or
+**Clear**, and **Copy N**. The copy is in library order, in the same paste-as-bullets format as before.
+The view stays mounted across tabs, so a selection lasts until it is copied or cancelled.
+
+**Backup and restore are in Settings, not the Library.** Export All was the same file as Settings →
+Back up (which also records the last-backup time the weekly reminder reads), so it went. Import All
+became **Restore from backup** beside it: rare and deliberate, and refused for a full replace while a
+repo is set, which Settings can explain in place.
+
 ### Saving a link that failed to load
 
 A URL typed into the reader or player used to live only in that view's input box.
@@ -618,8 +640,8 @@ Three rules the recorder follows:
 
 **Two guards are in place while a repo is configured:**
 
-- **Library → Import All (full replace) is refused,** because sync would read the swap as deleting the
-  whole library. Single-source additive import still works.
+- **Settings → Restore from backup refuses a full replace,** because sync would read the swap as deleting
+  the whole library. Adding a single-source file still works.
 - **Settings refuses the public app repo (`HarkenJot`) and any token that isn't fine-grained**
   (`github_pat_`). A classic token reaches every repo the account owns.
 
@@ -790,7 +812,7 @@ the repo, so the guard records exactly which sources and notes they were. Undo w
    the tree rather than stopping at "nothing moved";
 3. that sync reads the sources and notes back from the repo, where they were never deleted.
 
-A local delete can't be undone any other way once its 5-second toast is gone, because Import All is
+A local delete can't be undone any other way once its 5-second toast is gone, because a full restore is
 refused while a repo is set.
 
 **When Sync runs.** It runs on every pull trigger, plus:
@@ -1319,7 +1341,7 @@ routine.
 - **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 5089) plus the Strategy 0 block in `fetchArticleFromUrl`
 - **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10669)
 - **Gemini Notebook linking**: `NotebookLMModal` (line 6701); URL validation via `NOTEBOOK_URL_RE` (line 3475)
-- **Library/export, Unloaded links panel**: `LibraryView` (line 14696); the export itself is `downloadLibraryBackup` (line 4946)
+- **Library toolbar, copy selection, Unloaded links panel**: `LibraryView` (line 14696); backup and restore live in `SettingsView` (`backupNow`, `restoreFromBackup`), and the export itself is `downloadLibraryBackup` (line 4946)
 - **Settings page**: `SettingsView` (line 14368)
 - **GitHub sync**: `HJSyncCore` formats and merges (line 3796), `HJSync` settings, change recorder and GitHub client (line 4111), pull (line 4463), the agent README `LIBRARY_REPO_README` (line 4887), and in App the `HJSync.record*` calls in the persist effects plus `applyPulled` / `runSync`
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
