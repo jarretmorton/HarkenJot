@@ -3004,7 +3004,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.1';
+    const APP_VERSION = '1.72.3';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3700,9 +3700,7 @@
       const u = new SpeechSynthesisUtterance(text);
       u.rate = rate;
       u.volume = volume;
-      const voices = window.speechSynthesis.getVoices();
-      const chosen = (voiceURI && voices.find(v => v.voiceURI === voiceURI)) || getBestVoice();
-      if (chosen) u.voice = chosen;
+      applyVoice(u, resolveVoice(voiceURI));
       let done = false;
       const finish = () => { if (!done) { done = true; resolve(); } };
       u.onend = finish;
@@ -7586,6 +7584,81 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       );
     };
 
+    // How a chosen voice reaches the speech engine differs by platform, and Android is
+    // the odd one out. Blink sends only the voice's *name*; on Chrome for Android the
+    // engine is then driven by utterance.lang alone (TtsPlatformImpl.speak calls
+    // TextToSpeech.setLanguage(lang)) and the name is dropped. The app never set lang,
+    // so on Android every pick played the system default — the picker "never worked".
+    // Setting lang to the voice's own language is harmless elsewhere: desktop Chrome
+    // treats a voice name as a hard filter and only uses lang to rank among matches.
+    // Android also lists one "voice" per *language* (name "English United Kingdom",
+    // lang "en_GB" — underscore), so a pick there chooses the accent; which voice
+    // speaks each language is set in Android's own text-to-speech settings.
+    const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+    const normLang = (l) => (l || '').replace(/_/g, '-').toLowerCase();
+
+    // Some browsers hand a page no voices at all — Edge on Android is the known one:
+    // getVoices() stays [] although it speaks with the phone's engine. A page can't
+    // list what it isn't given, but on Android the engine is driven by
+    // utterance.lang (above), so an accent can still be asked for by language alone.
+    // These stand in for voices then, under a "lang:" URI so the pick is stored like
+    // any other voice. They carry no SpeechSynthesisVoice, so applyVoice must never
+    // assign one to utterance.voice (that setter throws on anything else).
+    const ACCENT_FALLBACKS = [
+      ['en-US', 'English (United States)'],
+      ['en-GB', 'English (United Kingdom)'],
+      ['en-AU', 'English (Australia)'],
+      ['en-IN', 'English (India)'],
+    ];
+    const LANG_URI_PREFIX = 'lang:';
+    const langPseudoVoice = (lang) => {
+      const known = ACCENT_FALLBACKS.find(([l]) => l === lang);
+      return { voiceURI: LANG_URI_PREFIX + lang, name: known ? known[1] : lang, lang, localService: true, pseudo: true };
+    };
+    const ACCENT_VOICES = ACCENT_FALLBACKS.map(([l]) => langPseudoVoice(l));
+    // A saved URI back to a voice: a real one from the list, or an accent pick.
+    const findVoice = (voices, voiceURI) => {
+      if (!voiceURI) return null;
+      if (voiceURI.startsWith(LANG_URI_PREFIX)) return langPseudoVoice(voiceURI.slice(LANG_URI_PREFIX.length));
+      return voices.find(v => v.voiceURI === voiceURI) || null;
+    };
+    // Which browser is answering, for the "no voices" message. Brand tokens first:
+    // every Chromium browser also says "Chrome".
+    const browserName = () => {
+      const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+      if (/EdgA?\//.test(ua)) return 'Edge';
+      if (/SamsungBrowser\//.test(ua)) return 'Samsung Internet';
+      if (/Firefox\//.test(ua)) return 'Firefox';
+      if (/OPR\/|Opera/.test(ua)) return 'Opera';
+      if (/Chrome\//.test(ua)) return 'Chrome';
+      if (/Safari\//.test(ua)) return 'Safari';
+      return 'This browser';
+    };
+
+    const applyVoice = (utterance, voice) => {
+      if (!voice) return;
+      if (!voice.pseudo) utterance.voice = voice;
+      if (voice.lang) utterance.lang = voice.lang.replace(/_/g, '-');
+    };
+    // The saved voice if this browser has it, else the auto pick.
+    const resolveVoice = (voiceURI) => {
+      return findVoice(window.speechSynthesis.getVoices(), voiceURI) || getBestVoice();
+    };
+    // getVoices() is empty until the engine has loaded (Chrome loads lazily, Android
+    // asynchronously), so anything that shows voices has to re-render on voiceschanged.
+    const useVoices = () => {
+      const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+      const [voices, setVoices] = useState(() => (synth ? synth.getVoices() : []));
+      useEffect(() => {
+        if (!synth) return undefined;
+        const refresh = () => setVoices(synth.getVoices());
+        refresh();
+        synth.addEventListener('voiceschanged', refresh);
+        return () => synth.removeEventListener('voiceschanged', refresh);
+      }, [synth]);
+      return voices;
+    };
+
     // Get best available voice. Quality is prioritized over locality so we
     // surface the same neural voices Edge's "Read Aloud" feature uses
     // (Microsoft Online Natural — Aria/Guy/Jenny/Christopher/etc.) and Apple's
@@ -7634,9 +7707,20 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       );
       if (localGoogle) return localGoogle;
 
-      // 6. Any local English voice (macOS "Samantha", "Microsoft David", etc.).
-      const localEnglish = englishVoices.find(voice => voice.localService);
-      if (localEnglish) return localEnglish;
+      // 6. A local English voice — the device's own locale first, then the platform
+      // default, then any (macOS "Samantha", "Microsoft David", etc.). The locale
+      // match matters on Android, where these are languages rather than voices and
+      // list order is arbitrary: without it Auto could land on English (India) for
+      // a US device now that the pick's language is actually honoured.
+      const localEnglish = englishVoices.filter(voice => voice.localService);
+      const deviceLangs = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language]).map(normLang);
+      for (const dl of deviceLangs) {
+        const match = localEnglish.find(voice => normLang(voice.lang) === dl);
+        if (match) return match;
+      }
+      const localDefault = localEnglish.find(voice => voice.default);
+      if (localDefault) return localDefault;
+      if (localEnglish[0]) return localEnglish[0];
 
       // 7. Any local voice in any language.
       const anyLocal = voices.find(voice => voice.localService);
@@ -7672,6 +7756,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     // "Ava (Premium)" -> "Ava"; "Google US English" -> "Google US English".
     const shortVoiceLabel = (voice) => {
       if (!voice) return 'Auto';
+      // Android's per-language entries ("English United Kingdom", lang "en_GB") would
+      // all shorten to "English" — show the language tag instead. Same for an accent pick.
+      if (voice.pseudo || /_/.test(voice.lang || '')) return voice.lang.replace(/_/g, '-');
       let n = voice.name || '';
       n = n.replace(/^Microsoft\s+/i, '');
       n = n.split(' - ')[0];
@@ -7689,19 +7776,19 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     // Voice picker modal — lists every voice exposed by speechSynthesis.getVoices(),
     // grouped by quality tier so neural voices float to the top. Includes an "Auto"
     // option that clears selectedVoiceURI and re-enables getBestVoice() selection.
-    const VoiceModal = ({ show, onClose, selectedVoiceURI, setSelectedVoiceURI, showToast }) => {
-      const [voices, setVoices] = useState(() => (typeof window !== 'undefined' ? window.speechSynthesis.getVoices() : []));
+    const VoiceModal = ({ show, onClose, selectedVoiceURI, setSelectedVoiceURI, showToast, onBeforePreview }) => {
+      const voices = useVoices();
       const [showAllLanguages, setShowAllLanguages] = useState(false);
       const [query, setQuery] = useState('');
       const previewUtteranceRef = useRef(null);
-
+      // Voices load late on most browsers, so "none" only means none after a wait.
+      const [waitedForVoices, setWaitedForVoices] = useState(false);
       useEffect(() => {
         if (!show) return undefined;
-        const refresh = () => setVoices(window.speechSynthesis.getVoices());
-        refresh();
-        window.speechSynthesis.addEventListener('voiceschanged', refresh);
-        return () => window.speechSynthesis.removeEventListener('voiceschanged', refresh);
+        const t = setTimeout(() => setWaitedForVoices(true), 2500);
+        return () => clearTimeout(t);
       }, [show]);
+      const noVoicesListed = voices.length === 0 && waitedForVoices;
 
       // Reset the search box each time the modal opens so it doesn't surprise users
       // with a stale filter on next open.
@@ -7719,9 +7806,14 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 
       const previewVoice = (voice) => {
         try {
+          // A preview shares the one speech queue with the reader. Pause reading
+          // through the reader itself first; a bare cancel() here left it showing
+          // Pause with nothing playing.
+          if (onBeforePreview) onBeforePreview();
           window.speechSynthesis.cancel();
           const u = new SpeechSynthesisUtterance('This is what this voice sounds like.');
-          u.voice = voice;
+          applyVoice(u, voice);
+          u.onend = u.onerror = () => { if (previewUtteranceRef.current === u) previewUtteranceRef.current = null; };
           previewUtteranceRef.current = u;
           window.speechSynthesis.speak(u);
         } catch (_) { /* preview is best-effort */ }
@@ -7730,13 +7822,17 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const pickVoice = (voice) => {
         const newURI = voice ? voice.voiceURI : null;
         setSelectedVoiceURI(newURI);
-        window.speechSynthesis.cancel();
-        previewUtteranceRef.current = null;
+        // Stop only a preview. If the reader is playing it restarts the current
+        // sentence in the new voice itself (see the voice effect in ReaderView).
+        if (previewUtteranceRef.current) {
+          window.speechSynthesis.cancel();
+          previewUtteranceRef.current = null;
+        }
         if (showToast) showToast(voice ? `Voice set to ${shortVoiceLabel(voice)}` : 'Voice set to Auto');
         onClose();
       };
 
-      const savedVoiceMissing = !!selectedVoiceURI && voices.length > 0 && !voices.some(v => v.voiceURI === selectedVoiceURI);
+      const savedVoiceMissing = !!selectedVoiceURI && voices.length > 0 && !findVoice(voices, selectedVoiceURI);
 
       const trimmedQuery = query.trim().toLowerCase();
       const matchesQuery = (e) => {
@@ -7798,6 +7894,12 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               <button type="button" className="modal-close" onClick={onClose}>&times;</button>
             </div>
             <div className="modal-body voice-modal-body">
+              {IS_ANDROID && voices.length > 0 && (
+                <div className="voice-modal-hint">
+                  On Android, Chrome can only choose the language and accent. To change the voice itself, open Android Settings → Text-to-speech output → the engine's settings → Install voice data, pick the language and choose a voice there.
+                </div>
+              )}
+
               {savedVoiceMissing && (
                 <div className="voice-modal-hint">
                   Saved voice isn't available in this browser — using auto pick. iOS browsers can't access Microsoft's cloud Read Aloud voices; pick an Apple Premium voice for the best quality there.
@@ -7886,8 +7988,25 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 <div className="voice-modal-hint">No voices match "{query}". Try a name (Aria), a language code (en-GB), or a tier (Premium).</div>
               )}
 
-              {voices.length === 0 && (
-                <div className="voice-modal-hint">No voices available yet. Try opening this modal again in a moment — some browsers load voices lazily.</div>
+              {voices.length === 0 && !waitedForVoices && (
+                <div className="voice-modal-hint">Loading voices…</div>
+              )}
+
+              {noVoicesListed && !trimmedQuery && (
+                <>
+                  <div className="voice-modal-hint">
+                    {browserName()} isn't giving web pages a list of its voices{browserName() === 'Edge' && IS_ANDROID ? ' — a known limitation of Edge on Android' : ''}, so there are none to pick from. Auto still reads with your device's default voice.
+                    {IS_ANDROID ? ' You can ask for an accent below — tap Preview to hear whether this browser honours it. Chrome on Android lists one voice per language.' : ''}
+                  </div>
+                  {IS_ANDROID && (
+                    <>
+                      <div className="voice-section-title">Accents</div>
+                      <ul className="voice-list">
+                        {ACCENT_VOICES.map(v => renderRow({ voice: v, badge: null }))}
+                      </ul>
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -7905,6 +8024,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const [isRecording, setIsRecording] = useState(false);
       const [speed, setSpeed] = useState(1);
       const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+      const voices = useVoices();
+      const selectedVoice = findVoice(voices, selectedVoiceURI);
       const [manualContent, setManualContent] = useState('');
       const [showManualInput, setShowManualInput] = useState(false);
       const [showTextNote, setShowTextNote] = useState(false);
@@ -10335,13 +10456,18 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         utterance.volume = volume;
 
         // User-selected voice wins; fall back to auto-pick if it's missing in this browser.
-        const allVoices = window.speechSynthesis.getVoices();
-        const chosenVoice =
-          (selectedVoiceURI && allVoices.find(v => v.voiceURI === selectedVoiceURI)) ||
-          getBestVoice();
-        if (chosenVoice) {
-          utterance.voice = chosenVoice;
-        }
+        applyVoice(utterance, resolveVoice(selectedVoiceURI));
+
+        // An engine failure (e.g. Android with no voice data for the chosen
+        // language) fires error rather than end; without this the reader sat on
+        // Pause with nothing playing. Our own cancels are flagged and ignored.
+        utterance.onerror = (e) => {
+          if (wasCancelledRef.current || e.error === 'interrupted' || e.error === 'canceled') return;
+          console.warn('[HJ:tts] speech error:', e.error);
+          setIsPlaying(false);
+          releaseWakeLock();
+          showToast("This voice couldn't speak — try another voice, or Auto");
+        };
 
         utterance.onend = () => {
           // Don't continue if speech was intentionally cancelled
@@ -10391,7 +10517,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           anchor._intentionalPause = false;
           anchor.play().catch(() => {});
         }
-      }, [content, speed, currentSource, updateSource, selectedVoiceURI, volume]);
+      }, [content, speed, currentSource, updateSource, selectedVoiceURI, volume, showToast]);
 
       // Keep the ref updated with the latest speakFromIndex function
       useEffect(() => {
@@ -10412,6 +10538,19 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         }
         prevSpeedRef.current = speed;
       }, [speed, isPlaying, currentSentenceIndex]);
+
+      // Same for the voice: restart the current sentence in the newly picked voice.
+      const prevVoiceRef = useRef(selectedVoiceURI);
+      useEffect(() => {
+        if (prevVoiceRef.current !== selectedVoiceURI && isPlaying && speakFromIndexRef.current) {
+          wasCancelledRef.current = true;
+          window.speechSynthesis.cancel();
+          setTimeout(() => {
+            speakFromIndexRef.current(currentSentenceIndex);
+          }, 50);
+        }
+        prevVoiceRef.current = selectedVoiceURI;
+      }, [selectedVoiceURI, isPlaying, currentSentenceIndex]);
 
       // Same for volume. utterance.volume is fixed when the utterance is built, so
       // without this a change wouldn't be heard until the next sentence began.
@@ -11306,15 +11445,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                             type="button"
                             className="voice-control-button"
                             onClick={() => setVoiceModalOpen(true)}
-                            title={(() => {
-                              const v = window.speechSynthesis.getVoices().find(x => x.voiceURI === selectedVoiceURI);
-                              return v ? v.name : 'Auto — best available';
-                            })()}
+                            title={selectedVoice ? selectedVoice.name : 'Auto — best available'}
                           >
-                            {(() => {
-                              const v = window.speechSynthesis.getVoices().find(x => x.voiceURI === selectedVoiceURI);
-                              return v ? shortVoiceLabel(v) : 'Auto';
-                            })()}
+                            {selectedVoice ? shortVoiceLabel(selectedVoice) : 'Auto'}
                           </button>
                         </div>
                       )}
@@ -11416,6 +11549,13 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             selectedVoiceURI={selectedVoiceURI}
             setSelectedVoiceURI={setSelectedVoiceURI}
             showToast={showToast}
+            onBeforePreview={() => {
+              if (!isPlaying) return;
+              wasCancelledRef.current = true;
+              window.speechSynthesis.cancel();
+              setIsPlaying(false);
+              releaseWakeLock();
+            }}
           />
         </div>
       );
