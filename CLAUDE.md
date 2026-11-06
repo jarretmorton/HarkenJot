@@ -144,6 +144,10 @@ The lock also matches what car mode already assumes: `.playback-bar.car-mode` is
 full-height column ending in a 2×2 grid of `min-height: 80px` buttons (70px under 500px),
 which does not fit in a phone's landscape height, and no car-mode rule is height-keyed.
 
+The grid's tracks are `minmax(0, 1fr)`, not `1fr`: a bare `1fr` can't shrink below its content,
+and `.note-btn` is `nowrap`, so with Android's larger text sizes "Volume Down" widened the left
+column (194px against 119px at 130%). The car-mode buttons wrap their label instead.
+
 **Expect a delay after deploying.** Chrome does not re-read the manifest on next launch —
 `ORIENTATION_DIFFERS` triggers a WebAPK update, but the check runs on roughly a 1-day timer
 (Chrome 76+) and applies on a later launch. Removing and re-adding the home-screen app

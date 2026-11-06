@@ -1478,10 +1478,13 @@
       line-height: 1;
     }
 
+    /* minmax(0, 1fr), not 1fr: a bare 1fr track can't shrink below its content's
+       min-content width, and .note-btn is nowrap, so "Volume Down" widened the
+       left column and squeezed the right one. */
     .playback-bar.car-mode .note-controls {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: repeat(2, minmax(0, 1fr));
       gap: 0.75rem;
       width: 100%;
       flex: 1;
@@ -1492,6 +1495,10 @@
     .note-btn.car-mode {
       width: 100%;
       height: 100%;
+      min-width: 0;
+      /* With equal columns a long label wraps rather than overflowing its cell. */
+      white-space: normal;
+      text-align: center;
       padding: 1rem;
       font-size: 1.25rem;
       min-height: 80px;
@@ -1504,6 +1511,7 @@
     .note-btn.car-mode svg {
       width: 40px;
       height: 40px;
+      flex-shrink: 0;
     }
 
     .note-btn.car-mode.active {
@@ -3004,7 +3012,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.3';
+    const APP_VERSION = '1.72.4';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
