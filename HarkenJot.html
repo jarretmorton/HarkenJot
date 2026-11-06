@@ -617,24 +617,42 @@
       overflow: hidden;
     }
 
+    /* The notes panel hangs from the bottom of the header. --header-bottom is
+       measured by App (ResizeObserver on .header), because the header is ~60px on
+       desktop but wraps to two rows (logo, then tabs) on a phone, and grows again
+       with font scaling — a fixed 60px put the panel's own title and close button
+       underneath it. The fallback only covers the first frame. */
     .sidebar {
       position: fixed;
-      right: -360px;
-      top: calc(60px + env(safe-area-inset-top));
+      right: 0;
+      top: var(--header-bottom, calc(60px + env(safe-area-inset-top)));
       height: calc(100% - 60px);
-      height: calc(100dvh - 60px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-      width: 360px;
-      padding: 1rem;
+      height: calc(100dvh - var(--header-bottom, calc(60px + env(safe-area-inset-top))) - env(safe-area-inset-bottom));
+      width: min(360px, 100vw);
+      padding: 0 1rem 1rem;
       background: var(--bg-secondary);
       overflow-y: auto;
+      overscroll-behavior: contain;
       min-height: 0;
-      transition: right 0.3s ease;
+      /* Slid out by its own width (plus room for the shadow) rather than a fixed
+         right offset, so a full-width panel on a phone hides completely too. */
+      transform: translateX(calc(100% + 24px));
+      transition: transform 0.3s ease;
       box-shadow: -4px 0 20px var(--shadow);
       z-index: 50;
     }
 
     .sidebar.open {
-      right: 0;
+      transform: none;
+    }
+
+    /* On a phone the panel takes the whole width: a 360px panel left a sliver of
+       the reader showing that was too narrow to read and easy to mis-tap. */
+    @media (max-width: 500px) {
+      .sidebar {
+        width: 100vw;
+        box-shadow: none;
+      }
     }
 
     /* Input Section */
@@ -1536,11 +1554,18 @@
     }
 
     /* Sidebar Notes */
+    /* Sticky, so the count and the close button stay in reach however far down
+       the list has been scrolled. */
     .sidebar-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
       font-family: 'Crimson Pro', serif;
       font-size: 1.1rem;
       font-weight: 600;
-      margin-bottom: 0.75rem;
+      padding: 0.75rem 0;
+      margin-bottom: 0.25rem;
+      background: var(--bg-secondary);
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -2979,7 +3004,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.0';
+    const APP_VERSION = '1.72.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -6413,6 +6438,24 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // phone's current media volume but never exceed it. It exists because Android
       // Auto binds its volume knob to the media app it has selected, and a browser
       // tab can never be one, so the car's own knob cannot reach this app.
+      // Publish where the header ends as --header-bottom, for the fixed notes panel.
+      const headerRef = useRef(null);
+      useEffect(() => {
+        const el = headerRef.current;
+        if (!el) return;
+        const update = () => {
+          document.documentElement.style.setProperty('--header-bottom', `${Math.round(el.getBoundingClientRect().bottom)}px`);
+        };
+        update();
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+        if (ro) ro.observe(el);
+        window.addEventListener('resize', update);
+        return () => {
+          if (ro) ro.disconnect();
+          window.removeEventListener('resize', update);
+        };
+      }, []);
+
       const [themePref, setThemePref] = useState(readThemePref);
       useEffect(() => {
         applyTheme(themePref);
@@ -7037,7 +7080,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 
       return (
         <div className="app-container">
-          <header className="header">
+          <header className="header" ref={headerRef}>
             <div className="logo">
               <div className="logo-icon"><Icons.Logo /></div>
               <div>

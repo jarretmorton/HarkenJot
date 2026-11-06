@@ -101,7 +101,14 @@ Two pieces, and they are a matched pair — **never ship one without the other**
 
 `position: fixed` overlays sit outside `.app-container` and each carries its own
 inset: `.toast` (`bottom`), `.sidebar` (`top` + `height`), and `.modal-overlay`
-(`padding`). `.modal` uses `80dvh` with an `80vh` fallback — plain `vh` is the
+(`padding`).
+
+`.sidebar` (the notes panel) hangs from `var(--header-bottom)`, which App measures off
+`.header` with a ResizeObserver — never a fixed height. The header is ~80px on desktop
+but wraps to two rows on a phone (~117px, more with font scaling); the old hardcoded
+60px hid the panel's title and close button behind it. Under 500px the panel is full
+width, and it slides with `transform` so a full-width panel hides completely; its title
+row is sticky so the close button stays in reach while scrolling. `.modal` uses `80dvh` with an `80vh` fallback — plain `vh` is the
 *large* viewport and overflows behind the bars.
 
 Known and accepted: at ≥140% Android font scale the media player still clips, in
