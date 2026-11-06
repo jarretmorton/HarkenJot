@@ -23,6 +23,22 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="manifest" href="site.webmanifest">
   <meta name="theme-color" content="#c45a3b">
+  <!--
+    Theme, applied before first paint so a dark-mode reload never flashes light.
+    The preference ("light" | "dark" | "system") is per device and lives in
+    localStorage only (harkenjot_theme) — HJStore hydrates asynchronously, too late
+    for this. data-theme always holds the RESOLVED theme; App keeps it current when
+    the preference changes or, under "system", when the OS switches.
+  -->
+  <script>
+    (function () {
+      var pref = 'system';
+      try { pref = localStorage.getItem('harkenjot_theme') || 'system'; } catch (e) {}
+      var dark = pref === 'dark' || (pref !== 'light' && !!window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    })();
+  </script>
   <meta name="apple-mobile-web-app-title" content="HarkenJot">
 
   <!--
@@ -372,6 +388,50 @@
       --note-border: #f0e4b8;
       --success: #4a7c59;
       --recording: #c45a3b;
+      /* Raised surfaces (cards, inputs, the active segment of a control) — white in
+         light mode; one step lighter than the page in dark. */
+      --surface: #ffffff;
+      --highlight-bg: #fff3c4;
+      --highlight-border: #e6d9a5;
+      --danger: #dc2626;
+      --danger-soft: #fee2e2;
+      --success-hover: #3d6649;
+      --success-soft: #eef5f0;
+      --warning: #c9a227;
+      --error: #c0392b;
+      color-scheme: light;
+    }
+
+    /* Dark theme. data-theme is always the *resolved* theme ("light" or "dark"):
+       the head script and App's theme effect turn the "system" preference into one
+       of the two, so this is the only dark block. Every colour the UI uses must come
+       from a variable above — a literal white or pastel stays bright here. */
+    :root[data-theme="dark"] {
+      --bg-primary: #1a1816;
+      --bg-secondary: #221f1c;
+      --bg-tertiary: #2e2a26;
+      --text-primary: #ece6dc;
+      --text-secondary: #b8b0a4;
+      --text-muted: #8c8579;
+      --accent: #d4664a;
+      --accent-hover: #e27c5f;
+      --accent-soft: #3a2620;
+      --border: #3b3631;
+      --shadow: rgba(0, 0, 0, 0.35);
+      --note-bg: #362e1d;
+      --note-border: #5c4f2b;
+      --success: #6fa67d;
+      --recording: #e06a4a;
+      --surface: #262320;
+      --highlight-bg: #4a3f22;
+      --highlight-border: #6b5c30;
+      --danger: #f87171;
+      --danger-soft: #45201f;
+      --success-hover: #5b9069;
+      --success-soft: #20302a;
+      --warning: #d6b13d;
+      --error: #e05a4a;
+      color-scheme: dark;
     }
 
     * {
@@ -511,7 +571,7 @@
     }
 
     .nav-tab.active {
-      background: white;
+      background: var(--surface);
       color: var(--text-primary);
       box-shadow: 0 2px 8px var(--shadow);
     }
@@ -597,7 +657,7 @@
       border-radius: 10px;
       font-family: 'DM Sans', sans-serif;
       font-size: 0.875rem;
-      background: white;
+      background: var(--surface);
       transition: all 0.2s ease;
     }
 
@@ -656,7 +716,7 @@
 
     /* Reader Section */
     .reader-container {
-      background: white;
+      background: var(--surface);
       border-radius: 16px;
       box-shadow: 0 4px 24px var(--shadow);
       overflow: hidden;
@@ -821,7 +881,7 @@
     }
 
     .sentence.has-note:hover {
-      background: #fff3c4;
+      background: var(--highlight-bg);
     }
 
     /* Playback Bar */
@@ -988,7 +1048,7 @@
       align-items: center;
       gap: 0.375rem;
       padding: 0.375rem 0.625rem;
-      background: white;
+      background: var(--surface);
       border-radius: 8px;
       border: 1px solid var(--border);
       flex-shrink: 0;
@@ -1029,7 +1089,7 @@
       align-items: center;
       gap: 0.375rem;
       padding: 0.375rem 0.625rem;
-      background: white;
+      background: var(--surface);
       border-radius: 8px;
       border: 1px solid var(--border);
       min-width: 0;
@@ -1084,7 +1144,7 @@
       font-family: 'DM Sans', sans-serif;
       font-size: 0.875rem;
       color: var(--text-primary);
-      background: white;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
       box-sizing: border-box;
@@ -1193,7 +1253,7 @@
       padding: 0.3rem 0.55rem;
       border-radius: 6px;
       border: 1px solid var(--border);
-      background: white;
+      background: var(--surface);
       color: var(--text-secondary);
       cursor: pointer;
     }
@@ -1263,13 +1323,13 @@
     }
 
     .note-btn:hover {
-      background: #fff3c4;
-      border-color: #e6d9a5;
+      background: var(--highlight-bg);
+      border-color: var(--highlight-border);
     }
 
     .note-btn.recording,
     .note-btn.processing {
-      background: #fee2e2;
+      background: var(--danger-soft);
       border-color: var(--recording);
       color: var(--recording);
       animation: pulse-note 1.5s ease infinite;
@@ -1493,7 +1553,7 @@
     }
 
     .note-card {
-      background: white;
+      background: var(--surface);
       border-radius: 8px;
       padding: 0.75rem;
       box-shadow: 0 2px 8px var(--shadow);
@@ -1571,8 +1631,8 @@
     }
 
     .note-action-btn.delete:hover {
-      border-color: #dc2626;
-      color: #dc2626;
+      border-color: var(--danger);
+      color: var(--danger);
     }
 
     /* Unloaded links — the saved-failure panel at the top of the library.
@@ -1706,7 +1766,7 @@
     }
 
     .library-item {
-      background: white;
+      background: var(--surface);
       border-radius: 10px;
       padding: 1rem;
       box-shadow: 0 2px 12px var(--shadow);
@@ -1785,6 +1845,11 @@
     .library-item-type.youtube { background: #fce7f3; color: #9d174d; }
     .library-item-type.podcast { background: #d1fae5; color: #065f46; }
     .library-item-type.xvideo { background: #e0e7ff; color: #3730a3; }
+    :root[data-theme="dark"] .library-item-type.article { background: #1e2f4d; color: #93c5fd; }
+    :root[data-theme="dark"] .library-item-type.pdf { background: #45201f; color: #fca5a5; }
+    :root[data-theme="dark"] .library-item-type.youtube { background: #45203a; color: #f9a8d4; }
+    :root[data-theme="dark"] .library-item-type.podcast { background: #173a2f; color: #6ee7b7; }
+    :root[data-theme="dark"] .library-item-type.xvideo { background: #272a50; color: #a5b4fc; }
 
     .note-count {
       padding: 0.25rem 0.5rem;
@@ -1806,7 +1871,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: white;
+      background: var(--surface);
       color: transparent;
       flex-shrink: 0;
       align-self: center;
@@ -1834,8 +1899,8 @@
     }
 
     .read-status.clickable.checked:hover {
-      background: #3d6649;
-      border-color: #3d6649;
+      background: var(--success-hover);
+      border-color: var(--success-hover);
     }
 
     .read-status.clickable.in-progress:hover {
@@ -1845,7 +1910,7 @@
 
     /* Media Player Section */
     .media-container {
-      background: white;
+      background: var(--surface);
       border-radius: 16px;
       box-shadow: 0 4px 24px var(--shadow);
       overflow: hidden;
@@ -1941,7 +2006,7 @@
     }
 
     .media-tab.active {
-      background: white;
+      background: var(--surface);
       color: var(--text-primary);
       box-shadow: 0 1px 4px var(--shadow);
     }
@@ -2015,7 +2080,7 @@
       left: 50%;
       transform: translateX(-50%) translateY(100px);
       background: var(--text-primary);
-      color: white;
+      color: var(--bg-primary);
       padding: 0.875rem 1.5rem;
       border-radius: 10px;
       font-size: 0.9375rem;
@@ -2037,7 +2102,7 @@
     }
 
     .undo-btn {
-      background: white;
+      background: var(--surface);
       color: var(--text-primary);
       border: none;
       padding: 0.375rem 0.75rem;
@@ -2073,7 +2138,7 @@
     }
 
     .modal {
-      background: white;
+      background: var(--surface);
       border-radius: 16px;
       width: 90%;
       max-width: 500px;
@@ -2241,7 +2306,7 @@
 
     .search-result-item {
       padding: 0.75rem;
-      background: white;
+      background: var(--surface);
       border-radius: 6px;
       cursor: pointer;
       border: 1px solid var(--border);
@@ -2269,7 +2334,7 @@
       max-width: 640px;
       margin: 0 auto;
       padding: 1rem 1.25rem;
-      background: white;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
       box-shadow: 0 2px 12px var(--shadow);
@@ -2302,6 +2367,11 @@
       color: var(--text-secondary);
     }
 
+    .settings-field-last {
+      margin-bottom: 0;
+      margin-top: 0.5rem;
+    }
+
     .settings-field .url-input {
       padding: 0.6rem 0.8rem;
     }
@@ -2328,9 +2398,17 @@
     }
 
     .settings-mode.active {
-      background: white;
+      background: var(--surface);
       color: var(--text-primary);
       box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    /* In dark, var(--surface) sits too close to the bg-secondary track for the
+       selected segment to read as selected. */
+    :root[data-theme="dark"] .settings-mode.active,
+    :root[data-theme="dark"] .nav-tab.active,
+    :root[data-theme="dark"] .media-tab.active {
+      background: var(--bg-tertiary);
     }
 
     .settings-mode:disabled:not(.active) {
@@ -2368,7 +2446,7 @@
     }
 
     .settings-status.ok {
-      background: #eef5f0;
+      background: var(--success-soft);
       color: var(--success);
     }
 
@@ -2401,8 +2479,8 @@
     }
 
     .sync-dot.ok { background: var(--success); }
-    .sync-dot.pending { background: #c9a227; }
-    .sync-dot.error, .sync-dot.confirm { background: #c0392b; }
+    .sync-dot.pending { background: var(--warning); }
+    .sync-dot.error, .sync-dot.confirm { background: var(--error); }
     .sync-dot.syncing { background: var(--accent); animation: sync-pulse 1s ease-in-out infinite; }
 
     @keyframes sync-pulse {
@@ -2553,7 +2631,7 @@
       height: 24px;
       border-radius: 50%;
       border: 2px solid var(--border);
-      background: white;
+      background: var(--surface);
       color: white;
       display: inline-flex;
       align-items: center;
@@ -2575,7 +2653,7 @@
       align-items: center;
       gap: 0.5rem;
       padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom));
-      background: white;
+      background: var(--surface);
       border-top: 1px solid var(--border);
       box-shadow: 0 -4px 16px var(--shadow);
     }
@@ -2608,7 +2686,7 @@
       position: absolute;
       top: calc(100% + 4px);
       right: 0;
-      background: white;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
       box-shadow: 0 4px 16px var(--shadow);
@@ -2901,7 +2979,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.71.3';
+    const APP_VERSION = '1.72.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -6280,6 +6358,25 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       return source ? { tab: s.tab, source } : null;
     }
 
+    // Theme preference: 'light' | 'dark' | 'system'. Per device, in localStorage
+    // only (like the sync config) — the <head> script reads it before first paint,
+    // which HJStore's async hydration would be too late for.
+    const THEME_KEY = 'harkenjot_theme';
+    const THEME_PREFS = ['light', 'dark', 'system'];
+    function readThemePref() {
+      try {
+        const v = localStorage.getItem(THEME_KEY);
+        return THEME_PREFS.includes(v) ? v : 'system';
+      } catch (e) { return 'system'; }
+    }
+    function systemPrefersDark() {
+      return !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    function applyTheme(pref) {
+      const dark = pref === 'dark' || (pref === 'system' && systemPrefersDark());
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    }
+
     // Main App
     function App() {
       // HJStore.init() runs before ReactDOM.render, so the cache is already populated.
@@ -6316,6 +6413,25 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // phone's current media volume but never exceed it. It exists because Android
       // Auto binds its volume knob to the media app it has selected, and a browser
       // tab can never be one, so the car's own knob cannot reach this app.
+      const [themePref, setThemePref] = useState(readThemePref);
+      useEffect(() => {
+        applyTheme(themePref);
+        try {
+          if (themePref === 'system') localStorage.removeItem(THEME_KEY);
+          else localStorage.setItem(THEME_KEY, themePref);
+        } catch (e) {}
+        if (themePref !== 'system' || !window.matchMedia) return;
+        // Follow the OS while "system" is chosen (e.g. an automatic sunset switch).
+        const mq = window.matchMedia('(prefers-color-scheme: dark)');
+        const onChange = () => applyTheme('system');
+        if (mq.addEventListener) mq.addEventListener('change', onChange);
+        else if (mq.addListener) mq.addListener(onChange);
+        return () => {
+          if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+          else if (mq.removeListener) mq.removeListener(onChange);
+        };
+      }, [themePref]);
+
       const [volume, setVolume] = useState(() => {
         const saved = HJStore.get('volume');
         return typeof saved === 'number' && isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
@@ -7098,6 +7214,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                     showToast={showToast}
                     runSync={runSync}
                     syncStatus={syncStatus}
+                    themePref={themePref}
+                    setThemePref={setThemePref}
                   />
                 </div>
               )}
@@ -7180,7 +7298,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               padding: '0.25rem 0.5rem',
               border: '2px solid var(--accent)',
               borderRadius: '6px',
-              background: 'white',
+              background: 'var(--surface)',
               outline: 'none',
               ...style
             }}
@@ -15140,7 +15258,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     };
 
     // Settings — per-device: none of it is synced or exported.
-    function SettingsView({ sources, notes, failedLinks, setSources, setNotes, setFailedLinks, showToast, runSync, syncStatus }) {
+    function SettingsView({ sources, notes, failedLinks, setSources, setNotes, setFailedLinks, showToast, runSync, syncStatus, themePref, setThemePref }) {
       const [config, setConfig] = useState(() => HJSync.getConfig());
       const [repoInput, setRepoInput] = useState(config ? `${config.owner}/${config.repo}` : '');
       const [branch, setBranch] = useState(config?.branch || 'main');
@@ -15405,6 +15523,31 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 
       return (
         <div className="settings-view">
+          <section className="settings-card">
+            <h2>Appearance</h2>
+            <div className="settings-field settings-field-last">
+              <div className="settings-modes" role="group" aria-label="Theme">
+                {[
+                  { id: 'light', label: 'Light' },
+                  { id: 'dark', label: 'Dark' },
+                  { id: 'system', label: 'System' },
+                ].map(t => (
+                  <button
+                    key={t.id}
+                    className={`settings-mode ${themePref === t.id ? 'active' : ''}`}
+                    aria-pressed={themePref === t.id}
+                    onClick={() => setThemePref(t.id)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <span className="settings-meta">
+                System follows this device's light or dark setting. Saved on this device only.
+              </span>
+            </div>
+          </section>
+
           <section className="settings-card">
             <h2>Library backup</h2>
             <p className="settings-help">
