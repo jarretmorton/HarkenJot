@@ -324,6 +324,36 @@ The lesson to carry forward is not "the knob can never work" — that framing wa
 that this surface is owned by Android Auto and Chrome, and can change under the app without
 any code change on our side. Re-test before assuming either way.
 
+### Reader voice (TTS)
+
+The Voice button opens `VoiceModal`; the pick is the global `selectedVoiceURI`. Every utterance
+gets its voice through **`applyVoice(utterance, resolveVoice(uri))`** — the reader, `speakText`
+("explain" answers in both views) and the modal's Preview. Never set `utterance.voice` alone:
+
+- **Chrome for Android ignores `utterance.voice`.** Blink sends only the voice's name, and
+  Android's `TtsPlatformImpl.speak` drives the engine with `TextToSpeech.setLanguage(utterance.lang)`
+  — the name is dropped. The app never set `lang`, so until v1.72.2 every pick on Android played
+  the system default. `applyVoice` sets `lang` from the voice; on desktop that is harmless, because
+  Chrome treats the voice name as a hard filter and only ranks matches by `lang`.
+- **Android lists languages, not voices** — one entry per locale (`"English United Kingdom"`,
+  lang `en_GB` with an underscore). A pick there chooses the accent; the voice for each language is
+  set in Android's text-to-speech settings, which the modal says on Android. `shortVoiceLabel` shows
+  the language tag for these, since they would all shorten to "English".
+- **Auto must prefer the device's locale** among local English voices (`getBestVoice` tier 6).
+  Android's list order is arbitrary, so now that the language is honoured, "first English voice"
+  could read a US user's articles in an Indian accent.
+
+Three behaviours around it:
+
+- **Anything that shows voices uses `useVoices()`,** which re-renders on `voiceschanged`;
+  `getVoices()` is empty until the engine loads (lazily on Chrome, asynchronously on Android).
+- **A voice change while reading restarts the current sentence** (same pattern as speed and
+  volume). The modal itself cancels only its own Preview; Preview pauses the reader first through
+  `onBeforePreview`. A bare `speechSynthesis.cancel()` from outside the reader leaves it on Pause
+  with nothing playing.
+- **An engine error stops playback with a toast** (`utterance.onerror`; our own cancels are flagged
+  through `wasCancelledRef` and ignored) — e.g. an Android language with no voice data installed.
+
 ### Speech Recognition
 
 Two recognition systems with automatic fallback:
@@ -1408,6 +1438,7 @@ routine.
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
 - **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2838) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
 - **Notes panel**: `NoteSidebar` (line 15166)
+- **Reader voice / TTS voice choice**: `applyVoice`/`resolveVoice`/`useVoices`/`getBestVoice` and `VoiceModal` (above `ReaderView`)
 - **App-level state/routing**: `App` (line 5818)
 
 ### Version
