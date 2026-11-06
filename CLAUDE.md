@@ -343,6 +343,15 @@ gets its voice through **`applyVoice(utterance, resolveVoice(uri))`** — the re
   Android's list order is arbitrary, so now that the language is honoured, "first English voice"
   could read a US user's articles in an Indian accent.
 
+**Some browsers list no voices at all** — Edge on Android is the known case (`getVoices()` stays
+`[]` although it speaks), and the picker then offered only Auto. After a 2.5 s wait the modal says
+which browser it is (`browserName()`), and on Android offers **accents** instead: `ACCENT_FALLBACKS`,
+stored as `lang:<tag>` URIs and turned back into pseudo-voices by `findVoice`. They set only
+`utterance.lang` — `applyVoice` must never assign a pseudo-voice to `utterance.voice`, whose setter
+throws on anything but a real `SpeechSynthesisVoice`. Whether a browser that hides its voices still
+honours `lang` is not knowable from the page, which is why the hint says to use Preview. Always look
+a saved URI up through `findVoice`, never `voices.find`, or an accent pick reads as "missing".
+
 Three behaviours around it:
 
 - **Anything that shows voices uses `useVoices()`,** which re-renders on `voiceschanged`;

@@ -3004,7 +3004,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.2';
+    const APP_VERSION = '1.72.3';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -7596,15 +7596,53 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     // speaks each language is set in Android's own text-to-speech settings.
     const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
     const normLang = (l) => (l || '').replace(/_/g, '-').toLowerCase();
+
+    // Some browsers hand a page no voices at all — Edge on Android is the known one:
+    // getVoices() stays [] although it speaks with the phone's engine. A page can't
+    // list what it isn't given, but on Android the engine is driven by
+    // utterance.lang (above), so an accent can still be asked for by language alone.
+    // These stand in for voices then, under a "lang:" URI so the pick is stored like
+    // any other voice. They carry no SpeechSynthesisVoice, so applyVoice must never
+    // assign one to utterance.voice (that setter throws on anything else).
+    const ACCENT_FALLBACKS = [
+      ['en-US', 'English (United States)'],
+      ['en-GB', 'English (United Kingdom)'],
+      ['en-AU', 'English (Australia)'],
+      ['en-IN', 'English (India)'],
+    ];
+    const LANG_URI_PREFIX = 'lang:';
+    const langPseudoVoice = (lang) => {
+      const known = ACCENT_FALLBACKS.find(([l]) => l === lang);
+      return { voiceURI: LANG_URI_PREFIX + lang, name: known ? known[1] : lang, lang, localService: true, pseudo: true };
+    };
+    const ACCENT_VOICES = ACCENT_FALLBACKS.map(([l]) => langPseudoVoice(l));
+    // A saved URI back to a voice: a real one from the list, or an accent pick.
+    const findVoice = (voices, voiceURI) => {
+      if (!voiceURI) return null;
+      if (voiceURI.startsWith(LANG_URI_PREFIX)) return langPseudoVoice(voiceURI.slice(LANG_URI_PREFIX.length));
+      return voices.find(v => v.voiceURI === voiceURI) || null;
+    };
+    // Which browser is answering, for the "no voices" message. Brand tokens first:
+    // every Chromium browser also says "Chrome".
+    const browserName = () => {
+      const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+      if (/EdgA?\//.test(ua)) return 'Edge';
+      if (/SamsungBrowser\//.test(ua)) return 'Samsung Internet';
+      if (/Firefox\//.test(ua)) return 'Firefox';
+      if (/OPR\/|Opera/.test(ua)) return 'Opera';
+      if (/Chrome\//.test(ua)) return 'Chrome';
+      if (/Safari\//.test(ua)) return 'Safari';
+      return 'This browser';
+    };
+
     const applyVoice = (utterance, voice) => {
       if (!voice) return;
-      utterance.voice = voice;
+      if (!voice.pseudo) utterance.voice = voice;
       if (voice.lang) utterance.lang = voice.lang.replace(/_/g, '-');
     };
     // The saved voice if this browser has it, else the auto pick.
     const resolveVoice = (voiceURI) => {
-      const voices = window.speechSynthesis.getVoices();
-      return (voiceURI && voices.find(v => v.voiceURI === voiceURI)) || getBestVoice();
+      return findVoice(window.speechSynthesis.getVoices(), voiceURI) || getBestVoice();
     };
     // getVoices() is empty until the engine has loaded (Chrome loads lazily, Android
     // asynchronously), so anything that shows voices has to re-render on voiceschanged.
@@ -7719,8 +7757,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     const shortVoiceLabel = (voice) => {
       if (!voice) return 'Auto';
       // Android's per-language entries ("English United Kingdom", lang "en_GB") would
-      // all shorten to "English" — show the language tag instead.
-      if (/_/.test(voice.lang || '')) return voice.lang.replace(/_/g, '-');
+      // all shorten to "English" — show the language tag instead. Same for an accent pick.
+      if (voice.pseudo || /_/.test(voice.lang || '')) return voice.lang.replace(/_/g, '-');
       let n = voice.name || '';
       n = n.replace(/^Microsoft\s+/i, '');
       n = n.split(' - ')[0];
@@ -7743,6 +7781,14 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const [showAllLanguages, setShowAllLanguages] = useState(false);
       const [query, setQuery] = useState('');
       const previewUtteranceRef = useRef(null);
+      // Voices load late on most browsers, so "none" only means none after a wait.
+      const [waitedForVoices, setWaitedForVoices] = useState(false);
+      useEffect(() => {
+        if (!show) return undefined;
+        const t = setTimeout(() => setWaitedForVoices(true), 2500);
+        return () => clearTimeout(t);
+      }, [show]);
+      const noVoicesListed = voices.length === 0 && waitedForVoices;
 
       // Reset the search box each time the modal opens so it doesn't surprise users
       // with a stale filter on next open.
@@ -7786,7 +7832,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         onClose();
       };
 
-      const savedVoiceMissing = !!selectedVoiceURI && voices.length > 0 && !voices.some(v => v.voiceURI === selectedVoiceURI);
+      const savedVoiceMissing = !!selectedVoiceURI && voices.length > 0 && !findVoice(voices, selectedVoiceURI);
 
       const trimmedQuery = query.trim().toLowerCase();
       const matchesQuery = (e) => {
@@ -7942,8 +7988,25 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 <div className="voice-modal-hint">No voices match "{query}". Try a name (Aria), a language code (en-GB), or a tier (Premium).</div>
               )}
 
-              {voices.length === 0 && (
-                <div className="voice-modal-hint">No voices available yet. Try opening this modal again in a moment — some browsers load voices lazily.</div>
+              {voices.length === 0 && !waitedForVoices && (
+                <div className="voice-modal-hint">Loading voices…</div>
+              )}
+
+              {noVoicesListed && !trimmedQuery && (
+                <>
+                  <div className="voice-modal-hint">
+                    {browserName()} isn't giving web pages a list of its voices{browserName() === 'Edge' && IS_ANDROID ? ' — a known limitation of Edge on Android' : ''}, so there are none to pick from. Auto still reads with your device's default voice.
+                    {IS_ANDROID ? ' You can ask for an accent below — tap Preview to hear whether this browser honours it. Chrome on Android lists one voice per language.' : ''}
+                  </div>
+                  {IS_ANDROID && (
+                    <>
+                      <div className="voice-section-title">Accents</div>
+                      <ul className="voice-list">
+                        {ACCENT_VOICES.map(v => renderRow({ voice: v, badge: null }))}
+                      </ul>
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -7962,7 +8025,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const [speed, setSpeed] = useState(1);
       const [voiceModalOpen, setVoiceModalOpen] = useState(false);
       const voices = useVoices();
-      const selectedVoice = selectedVoiceURI ? voices.find(v => v.voiceURI === selectedVoiceURI) : null;
+      const selectedVoice = findVoice(voices, selectedVoiceURI);
       const [manualContent, setManualContent] = useState('');
       const [showManualInput, setShowManualInput] = useState(false);
       const [showTextNote, setShowTextNote] = useState(false);
