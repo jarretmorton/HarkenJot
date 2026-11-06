@@ -174,7 +174,7 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 6701–7209 | `NotebookLMModal` — Modal for tagging local audio as a Gemini Notebook podcast and linking its notebook URL/source |
 | 7210–10668 | `ReaderView` — Article/PDF reader (incl. X.com posts/Articles) with TTS and voice notes |
 | 10669–14367 | `MediaView` — YouTube / podcast / X.com video / local audio player with timestamped notes |
-| 14368–14695 | `SettingsView` — Library backup and Restore from backup, sync settings and mode, and the Repository card (Sync or Pull / Check Connection / Initialize on one row, sync log) |
+| 14368–14695 | `SettingsView` — Appearance (theme), Library backup and Restore from backup, sync settings and mode, and the Repository card (Sync or Pull / Check Connection / Initialize on one row, sync log) |
 | 14696–15165 | `LibraryView` — Source and note management, the toolbar (Search · Filter · Copy · Sync), copy selection, the **Unloaded links** panel |
 | 15166–15370 | `NoteSidebar` — Notes display, editing, and navigation |
 | 15372 | `ReactDOM.createRoot` render call |
@@ -215,6 +215,7 @@ All state lives in the `App` component via `useState` hooks. There is no externa
 - `pendingNotebookLMModal` — Set when a local audio file is loaded so MediaView can show the NotebookLM modal
 - `failedLinks` — URLs that failed to load, with the diagnostic trace of the attempt (see **Saving a link that failed to load**)
 - `retryLink` — Set when a saved failure is retried from the library; the target view consumes it, refills its input and re-runs the load
+- `themePref` — `light` / `dark` / `system` (see **Theme**)
 
 State is persisted via the `HJStore` module, which is backed by **IndexedDB**
 (object store `kv` in database `harkenjot`) to avoid the ~5 MB localStorage cap.
@@ -244,12 +245,33 @@ the user actually used last.
 | `sync_clock` | `harkenjot_sync_clock` | GitHub sync's record of local changes — per-field and per-note timestamps, and tombstones for deletes. Absent until a sync repo is configured (see **GitHub sync**) |
 | `sync_meta` | `harkenjot_sync_meta` | GitHub sync's view of the repo as of the last pull or Initialize: repo, branch and commit; the repo's blob SHA per file (`shas`); this device's SHA per file then (`localShas`); the paths this device has that the repo doesn't (`pending`); the positions as last synced (`positions`) |
 
-Four keys live in `localStorage` only, never in `HJStore`, and are never exported:
+Five keys live in `localStorage` only, never in `HJStore`, and are never exported:
+
+- `harkenjot_theme` — this device's theme preference (absent means `system`);
 
 - `harkenjot_sync_config` — this device's sync settings, including the mode;
 - `harkenjot_gh_token` — the GitHub token;
 - `harkenjot_last_backup` — when this device last downloaded a library backup;
 - `harkenjot_sync_log` — the last 20 sync events, shown in Settings.
+
+### Theme
+
+Settings opens with an **Appearance** card: Light / Dark / System. The preference is per device,
+in `localStorage` (`harkenjot_theme`) rather than `HJStore`, because a small script in `<head>`
+applies it **before first paint** — `HJStore` hydrates asynchronously, which would flash light on
+every dark reload.
+
+`<html data-theme>` always holds the **resolved** theme, `light` or `dark`; `system` is resolved by
+that head script and by App's theme effect, which also follows a live OS switch through
+`matchMedia('(prefers-color-scheme: dark)')`. So the CSS has exactly one dark block,
+`:root[data-theme="dark"]`, redefining the `:root` variables (it also sets `color-scheme`, so native
+scrollbars and form controls follow).
+
+**Every colour must come from a variable.** A literal `white` or pastel stays bright in dark mode.
+Raised surfaces that used to be `background: white` are `var(--surface)`; highlights, danger, success
+and the sync-dot colours have their own variables. White text on `--accent` is fine as is. The
+per-type library badges are the one place with dark-specific selectors rather than variables. The
+toast is inverse in both themes (`--text-primary` background, `--bg-primary` text).
 
 ### In-app volume
 
@@ -1374,6 +1396,7 @@ routine.
 - **Gemini Notebook linking**: `NotebookLMModal` (line 6701); URL validation via `NOTEBOOK_URL_RE` (line 3475)
 - **Library toolbar, copy selection, Unloaded links panel**: `LibraryView` (line 14696); backup and restore live in `SettingsView` (`backupNow`, `restoreFromBackup`), and the export itself is `downloadLibraryBackup` (line 4946)
 - **Settings page**: `SettingsView` (line 14368)
+- **Theme / dark mode**: the `<head>` theme script, the `:root[data-theme="dark"]` CSS block, and `readThemePref`/`applyTheme` above `App`
 - **GitHub sync**: `HJSyncCore` formats and merges (line 3796), `HJSync` settings, change recorder and GitHub client (line 4111), pull (line 4463), the agent README `LIBRARY_REPO_README` (line 4887), and in App the `HJSync.record*` calls in the persist effects plus `applyPulled` / `runSync`
 - **Failed-link capture**: `recordFailedLink`/`dropFailedLink` in `App`, `linkTrace` + `formatFailedLinkReport` at top level, and the `failed(…)`/`failedLoad(…)` helpers inside `fetchArticleFromUrl` and `MediaView`
 - **What counts as a link**: `looksLikeUrl`/`extractUrlFromInput` (line 2838) plus the gates at the top of `fetchArticleFromUrl` and `loadMedia`
