@@ -14,7 +14,7 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Gemini Notebook Integration** (formerly NotebookLM) — Play Gemini Notebook podcast exports as local audio, link them back to their notebook URL, and jump to Gemini Notebook from any article
 - **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
-- **Library Management** — Browse, search and filter your sources, and copy the ones you pick — with their notes — to paste elsewhere
+- **Library Management** — Browse, search and filter your sources, and copy the ones you pick — with their notes — to paste elsewhere. Mark what you've copied to your tracker as **Logged**, and filter for what isn't logged yet
 - **Unloaded Links** — A link that fails to load is kept instead of lost. The library lists it with where the load gave up and a copyable report of the attempt, plus one-tap retry — worth trying, since most of these failures are free proxies and archives being temporarily unavailable rather than anything permanent
 - **Car Mode** — Simplified, large-button interface for hands-free use while driving
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
@@ -57,7 +57,7 @@ HarkenJot has three main views:
 |-----|---------|
 | **Reader** | Load articles, X.com posts/Articles or GitHub READMEs (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
 | **Media** | Play YouTube videos, podcasts (via a Spotify or Apple Podcasts episode link, RSS or an audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
-| **Library** | Browse all saved sources and notes. Search, filter by read status, pick sources to copy with their notes, and sync. |
+| **Library** | Browse all saved sources and notes. Search, filter by read status or logged, pick sources to copy with their notes and log them, and sync. |
 
 The **gear** in the header opens **Settings**: library backup and restore, and GitHub sync.
 

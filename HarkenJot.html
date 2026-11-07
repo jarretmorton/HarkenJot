@@ -1564,6 +1564,23 @@
     /* Sidebar Notes */
     /* Sticky, so the count and the close button stay in reach however far down
        the list has been scrolled. */
+    .sidebar-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 400;
+    }
+
+    .sidebar-copy {
+      height: 32px;
+      padding: 0 0.7rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.85rem;
+    }
+
     .sidebar-title {
       position: sticky;
       top: 0;
@@ -2115,6 +2132,10 @@
       background: var(--text-primary);
       color: var(--bg-primary);
       padding: 0.875rem 1.5rem;
+      /* Positioned from the centre, a shrink-to-fit box could only use the right
+         half of the screen, so short messages wrapped onto several lines. */
+      width: max-content;
+      max-width: calc(100vw - 2rem);
       border-radius: 10px;
       font-size: 0.9375rem;
       box-shadow: 0 4px 20px rgba(0,0,0,0.2);
@@ -2752,6 +2773,85 @@
       font-weight: 600;
     }
 
+    .filter-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0.25rem 0.2rem;
+    }
+
+    .filter-count {
+      margin-left: auto;
+      padding-left: 0.75rem;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 400;
+    }
+
+    .filter-tick {
+      width: 14px;
+      display: inline-flex;
+      color: var(--accent);
+    }
+
+    .log-mark {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .log-mark svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .log-mark.logged { color: var(--success); }
+    .log-mark.unlogged { color: var(--text-muted); }
+
+    /* The logged mark on a library card. It is also the un-log button, so the
+       hit area is larger than the icon; negative margins keep the row's height. */
+    .log-btn {
+      margin: -6px -6px -6px auto;
+      flex-shrink: 0;
+      width: 30px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: none;
+      color: var(--success);
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .log-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .log-offer-text {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      font-size: 0.8rem;
+      line-height: 1.3;
+      color: var(--text-primary);
+    }
+
+    .log-offer-text span {
+      color: var(--text-secondary);
+    }
+
+    .log-offer-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
     .filter-option .read-status {
       width: 18px;
       height: 18px;
@@ -2968,6 +3068,8 @@
       Library: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="12" y2="14"/></svg>,
       Headphones: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>,
       Link: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
+      Logged: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>,
+      NotLogged: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>,
       Copy: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
       Trash: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
       Recycle: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/><path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12"/><path d="m14 16-3 3 3 3"/><path d="M8.293 13.596 7.196 9.5 3.1 10.598"/><path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843"/><path d="m13.378 9.633 4.096 1.097 1.097-4.096"/></svg>,
@@ -3012,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.5';
+    const APP_VERSION = '1.73.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3195,6 +3297,28 @@
         ? `${source.showName}: ${source.title}`
         : source.title;
       return urlParts.length > 0 ? `${titleLine} (${urlParts.join(', ')})` : titleLine;
+    };
+
+    // One copy format everywhere — a single note, a source from the notes panel,
+    // a selection in the library — so they all paste the same way: the header,
+    // then "Notes:" and a bullet per note, joined by soft breaks so the whole
+    // source is one paragraph (one bullet when pasted into a list).
+    const formatNoteForCopy = (note) => {
+      let prefix = '';
+      if (note.timestamp !== undefined) {
+        prefix = `[${formatTime(note.timestamp)}] `;
+      } else if (note.position !== undefined && note.context) {
+        const label = note.fullSentenceCaptured
+          ? `"${note.context}"`
+          : `"${note.context.trim().split(/\s+/).slice(0, 3).join(' ')}..."`;
+        prefix = `[Sentence ${note.position + 1} ${label}] `;
+      }
+      return `- ${prefix}${note.text}`;
+    };
+    const formatSourceForCopy = (source, notes) => {
+      const lines = [formatSourceHeader(source)];
+      if (notes.length > 0) lines.push('Notes:', ...notes.map(formatNoteForCopy));
+      return lines.join(SOFT_BREAK);
     };
 
     // Trigger phrases that, when present at the start of a note, cause the full
@@ -4091,19 +4215,10 @@
       // An agent may write a bare value; read it as a register that was never stamped.
       const asReg = (v) => (v && typeof v === 'object' && !Array.isArray(v) && 'value' in v) ? v : { value: v === undefined ? null : v };
 
-      // copiedAt is sticky: once any writer has set it a null never clears it,
-      // and between two set values the first one stands.
-      const mergeCopied = (a, b) => {
-        if (!a) return b;
-        if (!b) return a;
-        const sa = a.value != null, sb = b.value != null;
-        if (sa !== sb) return sa ? a : b;
-        if (!sa) return newer(a, b);
-        return cmpStamped(a, b) <= 0 ? a : b;
-      };
-
       // state.json — each field is its own last-writer-wins register, so a
       // speed change on one device and a status change on the other both survive.
+      // copiedAt (shown as "Logged") is one too: un-logging is a later null, and
+      // logging again after that is later still.
       const mergeState = (a, b) => {
         const out = { schema: Math.max(a.schema || 1, b.schema || 1) };
         const keys = new Set(Object.keys(a).concat(Object.keys(b)));
@@ -4111,7 +4226,7 @@
         keys.forEach(k => {
           const ra = k in a ? asReg(a[k]) : null;
           const rb = k in b ? asReg(b[k]) : null;
-          out[k] = k === 'copiedAt' ? mergeCopied(ra, rb) : newer(ra, rb);
+          out[k] = newer(ra, rb);
         });
         return out;
       };
@@ -5111,14 +5226,14 @@
       // and is taken as it is — even when whoever made it (a person on
       // github.com) left updatedAt alone or set it by hand. Only what this
       // device changed itself, since that pull or still waiting to go up,
-      // competes on updatedAt. copiedAt keeps its sticky rule regardless.
+      // competes on updatedAt.
       _rebase(p, l, r, since, me, pendingFile) {
         if (!since || !(p.endsWith('/state.json') || p.endsWith('/notes.json'))) return l;
         let ld, rd;
         try { ld = JSON.parse(l); rd = JSON.parse(r); } catch (e) { return l; }
         const mine = (rec) => !!rec && typeof rec === 'object' && rec.by === me && (pendingFile || (Date.parse(rec.updatedAt) || 0) > since);
         if (p.endsWith('/state.json')) {
-          Object.keys(rd).forEach(k => { if (k !== 'schema' && k !== 'copiedAt' && !mine(ld[k])) ld[k] = rd[k]; });
+          Object.keys(rd).forEach(k => { if (k !== 'schema' && !mine(ld[k])) ld[k] = rd[k]; });
         } else {
           const ln = ld.notes || {};
           Object.keys(rd.notes || {}).forEach(id => { if (!mine(ln[id])) ln[id] = rd.notes[id]; });
@@ -5480,7 +5595,9 @@ the later \`updatedAt\` wins, field by field.
 - \`status\` — \`not-started\`, \`in-progress\` or \`complete\`.
 - \`position\` — \`{"unit": "sentence", "at": 12}\` for text, \`{"unit": "seconds", "at": 754.2}\` for media.
 - \`deleted\` — \`true\` means the owner deleted the source. Skip it. Its folder stays in the repo.
-- \`copiedAt\` — when the source was copied to the weekly tracker. Once set it is never cleared.
+- \`copiedAt\` — when the source was copied to the weekly tracker; the app shows it as **Logged**.
+  The owner can un-log a source, which sets the value back to \`null\` with a newer \`updatedAt\`.
+  A \`null\` means not logged, whatever it was before.
 
 ## Rules for agents
 
@@ -5519,7 +5636,8 @@ until its \`meta.json\` exists.
 ## Finding sources to copy to the weekly tracker
 
 Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`copiedAt.value\`, and
-\`deleted.value\` not \`true\`. After copying one, set \`copiedAt\` as in rule 3.
+\`deleted.value\` not \`true\` — the app's **Read** + **Not logged** filter. After copying one, set
+\`copiedAt\` as in rule 3.
 `;
 
     // Download the whole library as JSON — Settings → Back up, and the backup
@@ -6883,6 +7001,31 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         setCurrentSource(prev => prev?.id === sourceId ? { ...prev, ...updates } : prev);
       };
 
+      // "Logged" means copied to the weekly tracker. It is stored as copiedAt, the
+      // name the sync repo and its agents use, and syncs like any other field:
+      // un-logging writes a null, which a later log outranks in turn.
+      const logSources = (ids) => {
+        const at = new Date().toISOString();
+        const chosen = new Set(ids);
+        setSources(prev => prev.map(s => chosen.has(s.id) ? { ...s, copiedAt: at } : s));
+        setCurrentSource(prev => prev && chosen.has(prev.id) ? { ...prev, copiedAt: at } : prev);
+        showToast(`Logged ${ids.length} source${ids.length !== 1 ? 's' : ''}`);
+      };
+
+      const unlogSource = (sourceId) => {
+        const source = sources.find(s => s.id === sourceId);
+        if (!source) return;
+        updateSource(sourceId, { copiedAt: null });
+        clearTimeout(undoTimeoutRef.current);
+        setUndoData({ type: 'unlog', data: { sourceId, copiedAt: source.copiedAt } });
+        clearTimeout(toastTimerRef.current);
+        setToast({ show: true, message: 'Un-logged', showUndo: true });
+        undoTimeoutRef.current = setTimeout(() => {
+          setUndoData(null);
+          setToast({ show: false, message: '', showUndo: false });
+        }, 5000);
+      };
+
       // The reader fetched the text of a source that arrived as a link alone (an
       // agent added it through the sync repo). Only the text is taken: the
       // source's own title and type stand, as its meta.json does.
@@ -6982,6 +7125,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           });
           setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: prevCreatedAt } : prev);
           showToast('Item moved back');
+        } else if (undoData.type === 'unlog') {
+          updateSource(undoData.data.sourceId, { copiedAt: undoData.data.copiedAt });
+          showToast('Logged again');
         }
 
         setUndoData(null);
@@ -7248,6 +7394,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                   deleteNote={deleteNote}
                   deleteSource={deleteSource}
                   moveSourceToToday={moveSourceToToday}
+                  logSources={logSources}
+                  unlogSource={unlogSource}
                   updateSource={updateSource}
                   showToast={showToast}
                   activeTab={activeTab}
@@ -15933,12 +16081,15 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     }
 
     // Library View Component
-    function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, updateSource, showToast, activeTab, syncMode, syncStatus, runSync }) {
+    function LibraryView({ sources, notes, failedLinks, retryFailedLink, removeFailedLink, setFailedLinks, setCurrentSource, openSourceWithNotes, deleteNote, deleteSource, moveSourceToToday, logSources, unlogSource, updateSource, showToast, activeTab, syncMode, syncStatus, runSync }) {
       const [searchQuery, setSearchQuery] = React.useState('');
       const [searchOpen, setSearchOpen] = React.useState(false);
       const searchInputRef = React.useRef(null);
       // Multi-select read-status filter ('unread' | 'inProgress' | 'read'); empty = show all
       const [statusFilter, setStatusFilter] = React.useState([]);
+      const [logFilter, setLogFilter] = React.useState(null); // null | 'logged' | 'unlogged'
+      // Set by a library Copy: the bar then offers to log what was just copied.
+      const [logOffer, setLogOffer] = React.useState(null);
       // Collapsed by default — the count badge is what makes the backlog
       // impossible to miss, so the entries themselves don't need to sit between
       // you and the library every time you open it. Expanded, the list is
@@ -16006,9 +16157,12 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           })
         : sources;
 
-      const filteredSources = statusFilter.length
-        ? searchedSources.filter(source => statusFilter.includes(getReadStatus(source)))
-        : searchedSources;
+      // The two filter groups combine: any picked status, and logged or not. Each
+      // group's counts are taken under the other group's choice, so the number
+      // beside an option is what picking it would show.
+      const statusOk = (source) => !statusFilter.length || statusFilter.includes(getReadStatus(source));
+      const logOk = (source) => !logFilter || (logFilter === 'logged') === !!source.copiedAt;
+      const filteredSources = searchedSources.filter(source => statusOk(source) && logOk(source));
 
       const groupedSources = filteredSources.reduce((acc, source) => {
         const date = new Date(source.createdAt).toDateString();
@@ -16026,36 +16180,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // The clipboard text for a set of sources, in the order the library shows
       // them. Each source becomes one paragraph (so one bullet when pasted); its
       // own lines are soft breaks within that paragraph.
-      const formatForCopy = (chosen) => {
-        const getFirstThreeWords = (text) => {
-          if (!text) return '';
-          const words = text.trim().split(/\s+/).slice(0, 3);
-          return words.join(' ');
-        };
-
-        return chosen.map(source => {
-          const sourceNotes = getNotesForSource(source.id);
-          const lines = [formatSourceHeader(source)];
-
-          if (sourceNotes.length > 0) {
-            lines.push('Notes:');
-            sourceNotes.forEach(note => {
-              let notePrefix = '';
-              if (note.timestamp !== undefined) {
-                notePrefix = `[${formatTime(note.timestamp)}] `;
-              } else if (note.position !== undefined && note.context) {
-                const sentenceLabel = note.fullSentenceCaptured
-                  ? `"${note.context}"`
-                  : `"${getFirstThreeWords(note.context)}..."`;
-                notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
-              }
-              lines.push(`- ${notePrefix}${note.text}`);
-            });
-          }
-
-          return lines.join(SOFT_BREAK);
-        }).join('\n');
-      };
+      const formatForCopy = (chosen) => chosen.map(source => formatSourceForCopy(source, getNotesForSource(source.id))).join('\n');
 
       // Copy picks sources rather than taking the whole library. Search and the
       // status filter keep working while selecting, so "Select all" can take
@@ -16067,11 +16192,13 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const allShownSelected = shownIds.length > 0 && shownIds.every(id => selectedIds.has(id));
 
       const toggleSelecting = () => {
+        setLogOffer(null);
         if (selecting) { setSelecting(false); setSelectedIds(new Set()); }
         else setSelecting(true);
       };
 
       const toggleSelected = (id) => {
+        setLogOffer(null);
         setSelectedIds(prev => {
           const next = new Set(prev);
           if (next.has(id)) next.delete(id); else next.add(id);
@@ -16098,9 +16225,16 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           return;
         }
         const noteCount = chosen.reduce((n, s) => n + getNotesForSource(s.id).length, 0);
-        showToast(`Copied ${chosen.length} source${chosen.length !== 1 ? 's' : ''} and ${noteCount} note${noteCount !== 1 ? 's' : ''}`);
-        setSelecting(false);
-        setSelectedIds(new Set());
+        // Offer to log only what isn't logged yet, so a re-copy never moves an
+        // earlier log date. With nothing left to log, there's nothing to ask.
+        const toLog = chosen.filter(s => !s.copiedAt).map(s => s.id);
+        if (!toLog.length) {
+          showToast(`Copied ${chosen.length} source${chosen.length !== 1 ? 's' : ''} and ${noteCount} note${noteCount !== 1 ? 's' : ''}`);
+          setSelecting(false);
+          setSelectedIds(new Set());
+          return;
+        }
+        setLogOffer({ ids: toLog, copied: chosen.length, notes: noteCount });
       };
 
       // The same sync the gear's status reports on, from where the library is
@@ -16144,10 +16278,10 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             )}
             <div ref={filterRef} className="lib-filter" style={{ position: 'relative' }}>
               <button
-                className={`btn btn-secondary lib-btn${statusFilter.length || filterOpen ? ' active' : ''}`}
+                className={`btn btn-secondary lib-btn${statusFilter.length || logFilter || filterOpen ? ' active' : ''}`}
                 onClick={() => setFilterOpen(open => !open)}
-                title="Filter by read status"
-                aria-label="Filter by read status"
+                title="Filter by status or log"
+                aria-label="Filter by status or log"
               >
                 <Icons.Filter />
                 <span className="lib-btn-label">Filter</span>
@@ -16169,7 +16303,24 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                         {status === 'inProgress' && <Icons.Dash />}
                       </div>
                       <span>{label}</span>
-                      {statusFilter.includes(status) && <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}><Icons.Check /></span>}
+                      <span className="filter-count">{searchedSources.filter(s => getReadStatus(s) === status && logOk(s)).length}</span>
+                      <span className="filter-tick">{statusFilter.includes(status) && <Icons.Check />}</span>
+                    </div>
+                  ))}
+                  <div className="filter-divider" />
+                  {[
+                    { key: 'unlogged', label: 'Not logged' },
+                    { key: 'logged', label: 'Logged' },
+                  ].map(({ key, label }) => (
+                    <div
+                      key={key}
+                      className={`filter-option${logFilter === key ? ' selected' : ''}`}
+                      onClick={() => setLogFilter(f => f === key ? null : key)}
+                    >
+                      <span className={`log-mark ${key}`}>{key === 'logged' ? <Icons.Logged /> : <Icons.NotLogged />}</span>
+                      <span>{label}</span>
+                      <span className="filter-count">{searchedSources.filter(s => statusOk(s) && (key === 'logged') === !!s.copiedAt).length}</span>
+                      <span className="filter-tick">{logFilter === key && <Icons.Check />}</span>
                     </div>
                   ))}
                 </div>
@@ -16277,7 +16428,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             <div className="empty-state">
               <div className="empty-state-icon">🔍</div>
               <h3>No results</h3>
-              <p>{searchQuery.trim() ? `No sources or notes match "${searchQuery}".` : 'No sources match the selected status filter.'}</p>
+              <p>{searchQuery.trim() ? `No sources or notes match "${searchQuery}".` : 'No sources match the filter.'}</p>
             </div>
           ) : (
             <div className="library-grid" style={{ flex: 1, overflow: 'auto', paddingBottom: selecting ? '5rem' : undefined }}>
@@ -16345,6 +16496,16 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                         {source.type !== 'podcast' && source.type !== 'youtube' && source.type !== 'xvideo' && source.url && <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(source.url)}</a>}
                         {(source.type === 'podcast' || source.type === 'youtube' || source.type === 'xvideo') && <span style={{ flexShrink: 0 }}>{source.duration ? formatTime(source.duration) : ''}</span>}
                         {(source.type === 'article' || source.type === 'pdf') && source.content && <span style={{ flexShrink: 0 }}>{(source.content.match(/[^.!?]+[.!?]+/g) || [source.content]).length} sentences</span>}
+                        {source.copiedAt && (
+                          <button
+                            className="log-btn"
+                            onClick={(e) => { e.stopPropagation(); if (!selecting) unlogSource(source.id); }}
+                            title={`Logged ${new Date(source.copiedAt).toLocaleDateString()} — tap to un-log`}
+                            aria-label="Logged — tap to un-log"
+                          >
+                            <Icons.Logged />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -16353,7 +16514,22 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             </div>
           )}
 
-          {selecting && (
+          {selecting && logOffer && (
+            <div className="select-bar" role="toolbar" aria-label="Log the copied sources">
+              <div className="log-offer-text">
+                <strong>Copied {logOffer.copied} source{logOffer.copied !== 1 ? 's' : ''} and {logOffer.notes} note{logOffer.notes !== 1 ? 's' : ''}.</strong>
+                <span>{logOffer.ids.length === logOffer.copied
+                  ? `Log ${logOffer.copied !== 1 ? 'them' : 'it'} as done?`
+                  : `Log the ${logOffer.ids.length} not yet logged?`}</span>
+              </div>
+              <button className="btn btn-secondary" onClick={toggleSelecting}>Close</button>
+              <button className="btn btn-primary log-offer-btn" onClick={() => { logSources(logOffer.ids); toggleSelecting(); }}>
+                <Icons.Logged /> Log {logOffer.ids.length}
+              </button>
+            </div>
+          )}
+
+          {selecting && !logOffer && (
             <div className="select-bar" role="toolbar" aria-label="Copy selected sources">
               <button className="btn btn-secondary" onClick={toggleSelecting}>Cancel</button>
               <span className="select-bar-count">{selectedCount} selected</span>
@@ -16416,44 +16592,42 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       };
 
       const copyNote = (note) => {
-        const getFirstThreeWords = (text) => {
-          if (!text) return '';
-          const words = text.trim().split(/\s+/).slice(0, 3);
-          return words.join(' ');
-        };
-
-        let notePrefix = '';
-        if (note.timestamp !== undefined) {
-          notePrefix = `[${formatTime(note.timestamp)}] `;
-        } else if (note.position !== undefined && note.context) {
-          const sentenceLabel = note.fullSentenceCaptured
-            ? `"${note.context}"`
-            : `"${getFirstThreeWords(note.context)}..."`;
-          notePrefix = `[Sentence ${note.position + 1} ${sentenceLabel}] `;
-        }
-
-        const noteText = [
-          formatSourceHeader(currentSource),
-          'Notes:',
-          `- ${notePrefix}${note.text}`
-        ].join(SOFT_BREAK);
-        navigator.clipboard.writeText(noteText);
+        navigator.clipboard.writeText(formatSourceForCopy(currentSource, [note]));
         showToast('Note copied to clipboard');
+      };
+
+      // The whole source with its notes, in the same format as the library's Copy.
+      const copySource = async () => {
+        try {
+          await navigator.clipboard.writeText(formatSourceForCopy(currentSource, notes));
+        } catch (e) {
+          showToast("Couldn't copy — the browser blocked the clipboard");
+          return;
+        }
+        showToast(`Copied with ${notes.length} note${notes.length !== 1 ? 's' : ''}`);
       };
 
       return (
         <div>
           <div className="sidebar-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span><Icons.Pencil /> Notes ({notes.length})</span>
-            {onClose && (
-              <button
-                onClick={onClose}
-                className="btn btn-secondary btn-icon"
-                style={{ width: '32px', height: '32px', padding: 0 }}
-              >
-                <Icons.X />
-              </button>
-            )}
+            <span className="sidebar-actions">
+              {currentSource && (
+                <button className="btn btn-secondary sidebar-copy" onClick={copySource} title="Copy this source and its notes">
+                  <Icons.Copy /> Copy
+                </button>
+              )}
+              {onClose && (
+                <button
+                  onClick={onClose}
+                  className="btn btn-secondary btn-icon"
+                  style={{ width: '32px', height: '32px', padding: 0 }}
+                  aria-label="Close notes"
+                >
+                  <Icons.X />
+                </button>
+              )}
+            </span>
           </div>
 
           {notes.length === 0 ? (
