@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.73.1';
+    const APP_VERSION = '1.74.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3264,11 +3264,6 @@
     const formatDate = (date) => new Date(date).toLocaleDateString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     });
-    const formatTime = (seconds) => {
-      const mins = Math.floor(seconds / 60);
-      const secs = Math.floor(seconds % 60);
-      return `${mins}:${secs.toString().padStart(2, '0')}`;
-    };
     // Three-state read indicator: 'unread' | 'inProgress' | 'read'.
     // Status is derived from the legacy isRead boolean when absent, so existing
     // sources marked complete keep reading as 'read' with no migration.
@@ -3281,45 +3276,75 @@
     };
     const nextReadStatus = (status) =>
       status === 'unread' ? 'inProgress' : status === 'inProgress' ? 'read' : 'unread';
-    // Lines within one source are joined with U+2028 LINE SEPARATOR rather than
-    // "\n" so a rich-text target (OneNote) treats them as soft breaks inside a
-    // single paragraph. A "\n" starts a new paragraph, which replaces — and so
-    // deletes — the bullet the user pasted into. Written as an escape sequence,
-    // never a raw character: U+2028 is a line terminator to pre-ES2019 parsers,
-    // and this file is transpiled by Babel Standalone in the browser.
-    const SOFT_BREAK = '\u2028';
-    // Build the title line used in copy/export text. Includes the podcast series
-    // (showName) before the episode title so pasted notes identify the show.
-    const formatSourceHeader = (source) => {
-      if (!source) return '';
-      const urlParts = [source.url || source.link || '', source.notebookLMUrl].filter(Boolean);
-      const titleLine = source.type === 'podcast' && source.showName
-        ? `${source.showName}: ${source.title}`
-        : source.title;
-      return urlParts.length > 0 ? `${titleLine} (${urlParts.join(', ')})` : titleLine;
+    /* HJCOPY-START */
+    // Everything between the HJCOPY markers is pure (no DOM, storage or network),
+    // so a Node harness can slice it out and check the copy format against
+    // expected output. Keep it that way.
+    const formatTime = (seconds) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     // One copy format everywhere — a single note, a source from the notes panel,
-    // a selection in the library — so they all paste the same way: the header,
-    // then "Notes:" and a bullet per note, joined by soft breaks so the whole
-    // source is one paragraph (one bullet when pasted into a list).
-    const formatNoteForCopy = (note) => {
-      let prefix = '';
-      if (note.timestamp !== undefined) {
-        prefix = `[${formatTime(note.timestamp)}] `;
-      } else if (note.position !== undefined && note.context) {
-        const label = note.fullSentenceCaptured
-          ? `"${note.context}"`
-          : `"${note.context.trim().split(/\s+/).slice(0, 3).join(' ')}..."`;
-        prefix = `[Sentence ${note.position + 1} ${label}] `;
+    // a selection in the library — and it is Markdown: the weekly tracker these
+    // are pasted into is a Markdown file in a git repo, read in VS Code, Obsidian
+    // and on GitHub. Each source is a list item whose title links to the source,
+    // with its notes as a nested list under it. Lines are joined with plain "\n",
+    // so a selection of several sources pastes as one nested list.
+    const mdLinkText = (text) => String(text ?? '').trim().replace(/[[\]]/g, '\\$&');
+    // Space and parentheses are the characters that end a Markdown link target.
+    const mdLinkUrl = (url) => String(url).trim()
+      .replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
+    const mdLink = (text, url) => `[${mdLinkText(text)}](${mdLinkUrl(url)})`;
+
+    // The source's list item, without the leading "- ". `sources` is the library,
+    // used to name the article a Gemini Notebook audio overview was made from.
+    const formatSourceHeader = (source, sources) => {
+      if (!source) return '';
+      const title = String(source.title ?? '').trim() || 'Untitled';
+      const url = source.url || source.link || '';
+      const notebookUrl = source.notebookLMUrl || '';
+      // Local audio of a notebook, linked to the source it was made from: the
+      // notebook is the link, and the linked source is named after it.
+      if (source.isNotebookLM && source.linkedSourceId) {
+        const target = notebookUrl || url;
+        const linked = (sources || []).find(s => s.id === source.linkedSourceId);
+        const linkedTitle = linked && String(linked.title ?? '').trim();
+        return (target ? mdLink(title, target) : title) +
+          (linkedTitle ? ` — NotebookLM audio of *${linkedTitle.replace(/\*/g, '\\*')}*` : '');
       }
-      return `- ${prefix}${note.text}`;
+      const target = url || notebookUrl;
+      let line = target ? mdLink(title, target) : title;
+      // Podcasts name the show ahead of the episode so the line identifies it.
+      const showName = source.type === 'podcast' && String(source.showName ?? '').trim();
+      if (showName) line = `${showName} — ${line}`;
+      if (url && notebookUrl) line += ` · ${mdLink('NotebookLM', notebookUrl)}`;
+      return line;
     };
-    const formatSourceForCopy = (source, notes) => {
-      const lines = [formatSourceHeader(source)];
-      if (notes.length > 0) lines.push('Notes:', ...notes.map(formatNoteForCopy));
-      return lines.join(SOFT_BREAK);
+
+    // A note as a nested list item (two-space indent). Continuation lines of a
+    // multi-line note are indented four spaces so they stay inside the bullet.
+    const formatNoteForCopy = (note) => {
+      const text = String(note.text ?? '').trim()
+        .split(/\r?\n/).map(l => l.trimEnd())
+        .map((l, i) => (i === 0 || !l ? l : `    ${l}`))
+        .join('\n');
+      let label = '';
+      if (note.timestamp != null) {
+        label = `[${formatTime(note.timestamp)}]`;
+      } else if (note.position != null && note.context) {
+        const context = String(note.context).trim();
+        const quote = note.fullSentenceCaptured
+          ? context
+          : `${context.split(/\s+/).slice(0, 3).join(' ').replace(/[.…]+$/, '')}...`;
+        label = `[Sentence ${note.position + 1} "${quote}"]`;
+      }
+      return `  - ${[label, text].filter(Boolean).join(' ')}`;
     };
+    const formatSourceForCopy = (source, notes, sources) =>
+      [`- ${formatSourceHeader(source, sources)}`, ...(notes || []).map(formatNoteForCopy)].join('\n');
+    /* HJCOPY-END */
 
     // Trigger phrases that, when present at the start of a note, cause the full
     // source sentence to be captured in the note's context (instead of the
@@ -7418,6 +7443,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
               <NoteSidebar
                 notes={currentNotes}
+                sources={sources}
                 currentSource={currentSource}
                 deleteNote={deleteNote}
                 updateNote={updateNote}
@@ -16169,9 +16195,8 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       });
 
       // The clipboard text for a set of sources, in the order the library shows
-      // them. Each source becomes one paragraph (so one bullet when pasted); its
-      // own lines are soft breaks within that paragraph.
-      const formatForCopy = (chosen) => chosen.map(source => formatSourceForCopy(source, getNotesForSource(source.id))).join('\n');
+      // them: one Markdown list, a top-level item per source with its notes nested.
+      const formatForCopy = (chosen) => chosen.map(source => formatSourceForCopy(source, getNotesForSource(source.id), sources)).join('\n');
 
       // Copy picks sources rather than taking the whole library. Search and the
       // status filter keep working while selecting, so "Select all" can take
@@ -16581,7 +16606,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     }
 
     // Note Sidebar Component
-    function NoteSidebar({ notes, currentSource, deleteNote, updateNote, navigateToNote, showToast, onClose }) {
+    function NoteSidebar({ notes, sources, currentSource, deleteNote, updateNote, navigateToNote, showToast, onClose }) {
       const [editingNoteId, setEditingNoteId] = useState(null);
       const [editText, setEditText] = useState('');
 
@@ -16604,14 +16629,14 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       };
 
       const copyNote = (note) => {
-        navigator.clipboard.writeText(formatSourceForCopy(currentSource, [note]));
+        navigator.clipboard.writeText(formatSourceForCopy(currentSource, [note], sources));
         showToast('Note copied to clipboard');
       };
 
       // The whole source with its notes, in the same format as the library's Copy.
       const copySource = async () => {
         try {
-          await navigator.clipboard.writeText(formatSourceForCopy(currentSource, notes));
+          await navigator.clipboard.writeText(formatSourceForCopy(currentSource, notes, sources));
         } catch (e) {
           showToast("Couldn't copy — the browser blocked the clipboard");
           return;
