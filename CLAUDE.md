@@ -555,8 +555,9 @@ The view stays mounted across tabs, so a selection lasts until it is copied or c
 
 **Logged means copied to the weekly tracker** (v1.73.0). It is the source's `copiedAt` — the name the
 sync repo and its agents use, so the UI word changed and the field did not. A logged card shows only a
-green clipboard-check icon at the end of its meta line; tapping it un-logs, with the usual 5-second
-Undo (`unlogSource`, undo type `unlog`). After **Copy N** the bottom bar stays put and asks "Log them as
+green clipboard-check icon at the end of its meta line; tapping it opens an **Un-log?** dialog, the same
+kind as Delete's, and **Un-log** there clears it (`unlogSource`). It asks first rather than offering an
+Undo toast, by request (v1.73.1). After **Copy N** the bottom bar stays put and asks "Log them as
 done?" with **Log N** and **Close** — a static bar, not a timed toast, by request. It offers only the
 copied sources not yet logged, so a re-copy never moves an earlier log date; when every one is logged
 already, Copy just copies, with a toast. Any change to the selection takes the offer away.
