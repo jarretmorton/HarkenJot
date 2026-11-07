@@ -553,6 +553,19 @@ a tap selects instead of opening, delete is hidden, and a bottom bar carries the
 **Clear**, and **Copy N**. The copy is in library order, in the same paste-as-bullets format as before.
 The view stays mounted across tabs, so a selection lasts until it is copied or cancelled.
 
+**Logged means copied to the weekly tracker** (v1.73.0). It is the source's `copiedAt` — the name the
+sync repo and its agents use, so the UI word changed and the field did not. A logged card shows only a
+green clipboard-check icon at the end of its meta line; tapping it un-logs, with the usual 5-second
+Undo (`unlogSource`, undo type `unlog`). After **Copy N** the bottom bar stays put and asks "Log them as
+done?" with **Log N** and **Close** — a static bar, not a timed toast, by request. It offers only the
+copied sources not yet logged, so a re-copy never moves an earlier log date; when every one is logged
+already, Copy just copies, with a toast. Any change to the selection takes the offer away.
+
+**Filter has two groups that combine:** read status (any picked) and **Not logged / Logged**. Every
+option shows a count, and each group's counts are taken under the other group's choice, so the number
+beside an option is what picking it would show. **Read + Not logged** is the tracker queue — the same
+set the agent README's "complete, no `copiedAt`" query finds.
+
 **Backup and restore are in Settings, not the Library.** Export All was the same file as Settings →
 Back up (which also records the last-backup time the weekly reminder reads), so it went. Import All
 became **Restore from backup** beside it: rare and deliberate, and refused for a full replace while a
@@ -561,8 +574,18 @@ repo is set, which Settings can explain in place.
 **The gear toggles Settings.** A second press goes `history.back()`: opening Settings pushed a history
 entry, so back lands on whichever tab it came from, and the browser's own Back agrees with it.
 
-**The notes panel has no panel-wide Copy or Export.** Copying moved to the Library's selection (which
-can take one source), and backups are Settings' job; each note keeps its own Copy.
+**The notes panel's Copy takes the open source with all its notes** (v1.73.0; the old panel-wide Copy
+and Export went in v1.71.1). It has no log step — logging is the Library's job — and each note keeps
+its own Copy. There is still no Export: backups are Settings' job.
+
+**There is one copy format** (`formatSourceForCopy` / `formatNoteForCopy`, top level beside
+`formatSourceHeader`): a single note, the notes panel and a library selection all produce the header,
+`Notes:`, then a bullet per note, joined by soft breaks. Before v1.73.0 the note-line logic was written
+out twice; never copy it into a third place.
+
+**A toast is as wide as its text** (up to the screen less 2rem). It is positioned from the centre with
+`left: 50%`, so a shrink-to-fit box could only use the right half of the screen and short messages
+wrapped onto several lines; `width: max-content` fixes that.
 
 **A toast gets its full three seconds.** `showToast` cancels the previous toast's hide timer (and the
 undo toasts cancel it too); before, a toast shown shortly after another was hidden by the older
@@ -656,6 +679,7 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
 - **v1.70.0** did the same for YouTube, X videos and podcasts, and added Apple Podcasts episode links
   (see **A media source can arrive without anything to play**).
 - **v1.70.1** looked up the channel name of a video that arrived without one.
+- **v1.73.0** made `copiedAt` (the app's **Logged**) an ordinary register, so an un-log syncs.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -689,7 +713,9 @@ Every merge rule must keep those three properties:
 - **A delete is a record in the same map** (`deleted: true`) that competes on `updatedAt` like an edit.
   A stale copy can never resurrect it; a genuinely later edit beats it, which is the accepted rule.
 - **`state.json` merges field by field;** each field is its own last-writer-wins register.
-- **`copiedAt` is sticky:** a null never clears it, and between two set values the first one stands.
+- **`copiedAt` (shown as Logged) is an ordinary register** since v1.73.0. It used to be sticky — a null
+  never cleared it — which made un-logging impossible to sync. Now an un-log is a later null and a re-log
+  is later still; the agent README says so.
 - **A source delete is the `deleted` register.** Undo writes a newer `deleted: false`.
 - **The app never deletes repo files.**
 - **A register with no stamp is written bare (`{"value": …}`)** and loses to any stamped change. That is
@@ -851,7 +877,7 @@ This is what makes hand edits on github.com work. A person changes the value and
 alone, or sets it by hand in the wrong timezone. Under plain last-writer-wins, the tie went to
 canonical order: "complete" could never beat "in-progress" at an equal timestamp, so a status could
 be changed once and never back. Only this device's own changes still compete on `updatedAt`.
-`copiedAt` is excluded and keeps its sticky rule.
+`copiedAt` follows the same rule since it stopped being sticky (v1.73.0).
 
 **A pull that couldn't reach GitHub retries itself** after 30 s, 1 min, 2 min, then every 5 min, and
 shows grey (offline) rather than red. Android can keep `navigator.onLine` true through airplane mode,
@@ -1446,6 +1472,8 @@ routine.
 - **GitHub READMEs**: `parseGitHubUrl` / `markdownToReadableText` (line 5089) plus the Strategy 0 block in `fetchArticleFromUrl`
 - **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10669)
 - **Gemini Notebook linking**: `NotebookLMModal` (line 6701); URL validation via `NOTEBOOK_URL_RE` (line 3475)
+- **Logged (copiedAt)**: `logSources` / `unlogSource` in `App`, the log offer and filter groups in `LibraryView`, the `copiedAt` lines in `LIBRARY_REPO_README`
+- **Copy format**: `formatSourceForCopy` / `formatNoteForCopy` (top level, beside `formatSourceHeader`)
 - **Library toolbar, copy selection, Unloaded links panel**: `LibraryView` (line 14696); backup and restore live in `SettingsView` (`backupNow`, `restoreFromBackup`), and the export itself is `downloadLibraryBackup` (line 4946)
 - **Settings page**: `SettingsView` (line 14368)
 - **Theme / dark mode**: the `<head>` theme script, the `:root[data-theme="dark"]` CSS block, and `readThemePref`/`applyTheme` above `App`
