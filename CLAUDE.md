@@ -19,6 +19,7 @@ CLAUDE.md               # This file
 NotebookLM.png          # NotebookLM logo asset (not referenced by the app or README)
 .nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 site.webmanifest        # PWA manifest (name, theme colour, icon set)
+tests/copy-format.test.mjs  # Node checks for the copy format (sliced out of HarkenJot.html)
 apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
 icon-android-192.png    # Android / PWA icon (padded + badge-aware)
 icon-android-512.png    # Android / PWA icon (padded + badge-aware)
@@ -474,9 +475,13 @@ python3 -m http.server 8000
 
 There is no build, compile, or transpile step. Edit `HarkenJot.html` directly and reload the browser. Babel transpiles JSX at runtime.
 
-### No Tests
+### Tests
 
-There is no test suite. Verify changes manually in the browser.
+There is no test suite for the app as a whole; verify changes manually in the browser. The one
+exception is the copy format: `node tests/copy-format.test.mjs` (no dependencies) slices the code
+between the `/* HJCOPY-START */` and `/* HJCOPY-END */` markers out of `HarkenJot.html` and checks
+it against expected Markdown. Run it after touching anything in that block, and keep the block free of
+DOM, storage and network calls so it keeps working.
 
 ### No Linter or Formatter
 
@@ -550,7 +555,7 @@ they transition **colour only** — `.btn`'s `transition: all` would slide the w
 nobody used it. Copy now starts a selection: a round mark per card (the square box is read status),
 a tap selects instead of opening, delete is hidden, and a bottom bar carries the count, **Select all N**
 (N = what search and the filter currently show, so a search, a filter or both can be taken whole) or
-**Clear**, and **Copy N**. The copy is in library order, in the same paste-as-bullets format as before.
+**Clear**, and **Copy N**. The copy is in library order, as one nested Markdown list (see **There is one copy format**).
 The view stays mounted across tabs, so a selection lasts until it is copied or cancelled.
 
 **Logged means copied to the weekly tracker** (v1.73.0). It is the source's `copiedAt` — the name the
@@ -579,10 +584,36 @@ entry, so back lands on whichever tab it came from, and the browser's own Back a
 and Export went in v1.71.1). It has no log step — logging is the Library's job — and each note keeps
 its own Copy. There is still no Export: backups are Settings' job.
 
-**There is one copy format** (`formatSourceForCopy` / `formatNoteForCopy`, top level beside
-`formatSourceHeader`): a single note, the notes panel and a library selection all produce the header,
-`Notes:`, then a bullet per note, joined by soft breaks. Before v1.73.0 the note-line logic was written
-out twice; never copy it into a third place.
+**There is one copy format, and it is Markdown** (v1.74.0; `formatSourceForCopy` /
+`formatNoteForCopy` / `formatSourceHeader`, top level between the `HJCOPY` markers). A single note, the
+notes panel and a library selection all produce the same thing: a list item per source whose title links
+to it, with its notes as a nested list (two-space indent), joined by plain `\n`, so several sources paste
+as one list. Before v1.73.0 the note-line logic was written out twice; never copy it into a third place.
+
+```
+- [Title](url)
+  - [22:02] a media note
+  - [Sentence 173 "first three words..."] a reader note
+  - [Sentence 171 "The whole highlighted sentence."]
+- Show Name — [Episode title](url)
+- [Audio title](notebookLMUrl) — NotebookLM audio of *Linked source title*
+- [Title](url) · [NotebookLM](notebookLMUrl)
+```
+
+**Why Markdown.** Copies go into a weekly tracker that is a Markdown file in a git repo, read in VS
+Code, Obsidian and on GitHub. Until v1.74.0 the target was OneNote: lines were joined with U+2028 soft
+breaks so a source stayed inside the one OneNote bullet it was pasted into (a `\n` started a new
+paragraph and replaced the bullet), with a `Notes:` line and URLs in parentheses. OneNote is retired,
+and `SOFT_BREAK` went with it — a U+2028 in a Markdown file is an invisible character, not a line break.
+
+The rules that keep the Markdown valid: link text escapes `[` and `]`; a link target encodes space, `(`
+and `)` (each would end the target); a multi-line note indents its continuation lines four spaces so
+they stay in its bullet; a podcast with `showName` puts the show before the linked episode; a NotebookLM
+audio (`isNotebookLM` + `linkedSourceId`) links to its notebook and names the source it was made from,
+which is why the formatter takes the library as a third argument (`NoteSidebar` gets `sources` for
+this) — if that source is gone the suffix is dropped. A reader note's quote is the first three words of
+its context with any trailing `.` or `…` stripped before the `...`; a highlighted sentence
+(`fullSentenceCaptured`) quotes the whole sentence and adds the note text only when there is any.
 
 **A toast is as wide as its text** (up to the screen less 2rem). It is positioned from the centre with
 `left: 50%`, so a shrink-to-fit box could only use the right half of the screen and short messages
@@ -1474,7 +1505,7 @@ routine.
 - **Media/podcast/X.com/local-audio functionality**: `MediaView` (line 10669)
 - **Gemini Notebook linking**: `NotebookLMModal` (line 6701); URL validation via `NOTEBOOK_URL_RE` (line 3475)
 - **Logged (copiedAt)**: `logSources` / `unlogSource` in `App`, the log offer and filter groups in `LibraryView`, the `copiedAt` lines in `LIBRARY_REPO_README`
-- **Copy format**: `formatSourceForCopy` / `formatNoteForCopy` (top level, beside `formatSourceHeader`)
+- **Copy format**: `formatSourceForCopy` / `formatNoteForCopy` / `formatSourceHeader` (top level, between the `HJCOPY` markers); checked by `tests/copy-format.test.mjs`
 - **Library toolbar, copy selection, Unloaded links panel**: `LibraryView` (line 14696); backup and restore live in `SettingsView` (`backupNow`, `restoreFromBackup`), and the export itself is `downloadLibraryBackup` (line 4946)
 - **Settings page**: `SettingsView` (line 14368)
 - **Theme / dark mode**: the `<head>` theme script, the `:root[data-theme="dark"]` CSS block, and `readThemePref`/`applyTheme` above `App`
