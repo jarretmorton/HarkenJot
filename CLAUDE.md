@@ -779,7 +779,9 @@ Five rules a pull keeps:
 
 - **An existing source keeps its own meta;** only what `state.json` carries is patched in, compared
   the way the app reads it (`getReadStatus`, null equal to missing). A source new to this device is
-  inserted whole, where its `createdAt` puts it.
+  inserted whole, where its `createdAt` puts it. A pulled `createdAt` change (Move to Today on another
+  device) moves an existing source there too (v1.72.5): the library groups by array order, so a date
+  patched in place opened today's group at the bottom, below the older ones.
 - **Text this device lacks is the one exception to write-once.** For a source held with no `content`,
   `text.txt` is read whenever the repo has it, changed since the last pull or not, and patched in.
   Text this device already has always stands.

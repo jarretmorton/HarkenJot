@@ -3012,7 +3012,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.72.4';
+    const APP_VERSION = '1.72.5';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4845,15 +4845,22 @@
       // can also work out the library it is leaving behind.
       patchSources(prev, ops) {
         const removed = new Set(ops.remove);
+        // The library groups by date and orders by position in the array, so
+        // a source goes where its createdAt says.
+        const place = (list, src) => {
+          const t = Date.parse(src.createdAt) || 0;
+          const i = list.findIndex(s => (Date.parse(s.createdAt) || 0) < t);
+          return i < 0 ? list.concat([src]) : list.slice(0, i).concat([src], list.slice(i));
+        };
+        // A new createdAt (Move to Today on another device) moves the source
+        // too: patched in place, today's group would open below the old one.
+        const moved = new Set(Object.keys(ops.patch).filter(id => 'createdAt' in ops.patch[id]));
         let next = prev.filter(s => !removed.has(s.id)).map(s => ops.patch[s.id] ? { ...s, ...ops.patch[s.id] } : s);
+        next.filter(s => moved.has(s.id)).forEach(src => { next = place(next.filter(s => s !== src), src); });
         const have = new Set(next.map(s => s.id));
         ops.insert.forEach(src => {
           if (have.has(src.id)) return;
-          // The library groups by date and orders by position in the array, so
-          // a source from elsewhere goes where its createdAt says.
-          const t = Date.parse(src.createdAt) || 0;
-          const i = next.findIndex(s => (Date.parse(s.createdAt) || 0) < t);
-          next = i < 0 ? next.concat([src]) : next.slice(0, i).concat([src], next.slice(i));
+          next = place(next, src);
         });
         return next;
       },
