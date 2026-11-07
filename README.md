@@ -12,15 +12,16 @@ HarkenJot is a self-contained note-taking web application for capturing notes wh
 - **Voice-Triggered Lookup** — Start a voice note with "explain \<term\>" to look it up on Wiktionary/Wikipedia; the answer is saved as a Q&A note at your current position and read aloud before playback resumes
 - **Multiple Content Types** — Load articles, PDFs, GitHub READMEs, YouTube videos, podcasts, X.com/Twitter videos, X.com posts/articles, and local audio files in a single interface
 - **Gemini Notebook Integration** (formerly NotebookLM) — Play Gemini Notebook podcast exports as local audio, link them back to their notebook URL, and jump to Gemini Notebook from any article
-- **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, and auto-scroll
+- **Text-to-Speech Reader** — Have articles and PDFs read aloud with sentence highlighting, speed control, a choice of voice (or accent, on Android), and auto-scroll
 - **Timestamped Notes** — Notes are linked to playback position (media) or sentence position (text), so you can jump back to context
-- **Library Management** — Browse, search and filter your sources, and copy the ones you pick — with their notes — to paste elsewhere. Mark what you've copied to your tracker as **Logged**, and filter for what isn't logged yet
+- **Library Management** — Browse, search and filter your sources, and copy the ones you pick — with their notes — to paste elsewhere. Mark what you've copied to your tracker as **Logged**, and filter for what isn't logged yet. The notes panel copies the open source with all its notes in the same format
 - **Unloaded Links** — A link that fails to load is kept instead of lost. The library lists it with where the load gave up and a copyable report of the attempt, plus one-tap retry — worth trying, since most of these failures are free proxies and archives being temporarily unavailable rather than anything permanent
-- **Car Mode** — Simplified, large-button interface for hands-free use while driving
+- **Car Mode** — Simplified, large-button interface for hands-free use while driving, with Volume Up / Down buttons that trim the app's volume below the phone's media volume
+- **Light and Dark Themes** — Light, Dark, or follow the system, chosen per device in Settings
 - **Fully Offline-Capable** — All data stored locally in the browser (IndexedDB, with a localStorage fallback); no account or server needed
 - **Optional GitHub Sync** — Keep the library in a private GitHub repo shared by your phone and desktop. Notes merge by note, deletes stick, edits made offline go up when you're back online, and agents can read the repo and add sources to it. Off unless you turn it on
 - **Single-File Deployment** — The entire application is one HTML file (plus optional home-screen icons)
-- **Add to Home Screen** — Installs to your phone's home screen with a proper app icon
+- **Add to Home Screen** — Installs to your phone's home screen as an app: its own icon, full screen without browser bars, held in portrait
 
 <img width="1080" height="1800" alt="Screenshot_20260606_084227_Edge" src="https://github.com/user-attachments/assets/743b5bf1-d40b-4ddd-9b59-e691501dfe1f" style="width: 35%;"/>
 
@@ -51,15 +52,15 @@ python3 -m http.server 8000
 
 ## How It Works
 
-HarkenJot has three main views:
+HarkenJot has three main views, plus a **Notes** tab that opens the notes panel for whatever is loaded:
 
 | Tab | Purpose |
 |-----|---------|
 | **Reader** | Load articles, X.com posts/Articles or GitHub READMEs (via URL), PDFs, or paste text. Read along or use text-to-speech. Take voice or text notes anchored to your reading position. |
-| **Media** | Play YouTube videos, podcasts (via a Spotify or Apple Podcasts episode link, RSS or an audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
+| **Player** | Play YouTube videos, podcasts (via a Spotify or Apple Podcasts episode link, RSS or an audio URL, including Substack podcast feeds), X.com/Twitter videos, or local audio files (e.g. Gemini Notebook podcast exports). Take voice or text notes anchored to the playback timestamp. |
 | **Library** | Browse all saved sources and notes. Search, filter by read status or logged, pick sources to copy with their notes and log them, and sync. |
 
-The **gear** in the header opens **Settings**: library backup and restore, and GitHub sync.
+The **gear** in the header opens **Settings**: appearance (light, dark or system), library backup and restore, and GitHub sync.
 
 ## Tech Stack
 
@@ -83,20 +84,27 @@ Upload `HarkenJot.html` to any static file host:
 - **S3 + CloudFront** — Upload to a bucket with static hosting enabled
 - **Any web server** — Copy the file to your server's document root
 
-Copy `apple-touch-icon.png` alongside it to get the home-screen icon on iOS. It's
-optional — without it the app works identically and iOS falls back to a
-screenshot thumbnail — and the browser-tab icon is embedded in the HTML either
-way.
+Copy these alongside it for the installed-app experience:
+
+- `site.webmanifest` — lets Android install it as an app that opens full screen, held in portrait
+- `icon-android-192.png` and `icon-android-512.png` — the Android home-screen icons the manifest names
+- `apple-touch-icon.png` — the iOS home-screen icon
+
+All four are optional. Without them the app works identically: Android adds a
+plain browser shortcut and iOS falls back to a screenshot thumbnail. The
+browser-tab icon is embedded in the HTML either way.
 
 HTTPS is recommended for full browser API support (microphone access, Media Session API).
 
 ### Adding to your home screen
 
 - **iOS (Safari)** — Share → Add to Home Screen
-- **Android (Chrome/Edge)** — ⋮ → Add to Home screen
+- **Android (Chrome/Edge)** — ⋮ → Add to Home screen (or Install app)
 
-The app opens in a normal browser tab. Launching without browser chrome would
-need a web app manifest, which isn't included yet.
+On Android the installed app opens full screen, without the browser's address
+bar, and stays in portrait however the phone is held. After an update to the
+manifest, Chrome can take a day or so to pick it up; removing the app from the
+home screen and adding it again applies it at once.
 
 ## GitHub sync (optional)
 
@@ -119,7 +127,7 @@ Once it is on, sync runs:
 - a minute after you stop editing;
 - when the app goes to the background.
 
-Notes merge note by note, and status, speed and position merge field by field, so edits on two devices never ask which copy to keep. A sync that would delete many sources at once waits for you to confirm or undo. Set the mode back to **Off** at any time: the app carries on from its own copy, and the repository keeps its full history.
+Notes merge note by note, and status, speed, position and Logged merge field by field, so edits on two devices never ask which copy to keep. A sync that would delete many sources at once waits for you to confirm or undo. Set the mode back to **Off** at any time: the app carries on from its own copy, and the repository keeps its full history.
 
 The repository's `README.md` explains its layout to agents, and `INDEX.md` lists every source with a link to its folder. An agent can add an article, a YouTube or X video, or a podcast episode as just a title and a link: HarkenJot fetches the text, or finds the video or the episode's audio, the first time you open it, and syncs it to your other devices.
 
