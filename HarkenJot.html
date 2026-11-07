@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.73.0';
+    const APP_VERSION = '1.73.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -7012,18 +7012,11 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         showToast(`Logged ${ids.length} source${ids.length !== 1 ? 's' : ''}`);
       };
 
+      // The library asks first (the same kind of dialog as Delete), so there is
+      // no Undo toast to race.
       const unlogSource = (sourceId) => {
-        const source = sources.find(s => s.id === sourceId);
-        if (!source) return;
         updateSource(sourceId, { copiedAt: null });
-        clearTimeout(undoTimeoutRef.current);
-        setUndoData({ type: 'unlog', data: { sourceId, copiedAt: source.copiedAt } });
-        clearTimeout(toastTimerRef.current);
-        setToast({ show: true, message: 'Un-logged', showUndo: true });
-        undoTimeoutRef.current = setTimeout(() => {
-          setUndoData(null);
-          setToast({ show: false, message: '', showUndo: false });
-        }, 5000);
+        showToast('Un-logged');
       };
 
       // The reader fetched the text of a source that arrived as a link alone (an
@@ -7125,9 +7118,6 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           });
           setCurrentSource(prev => prev?.id === sourceId ? { ...prev, createdAt: prevCreatedAt } : prev);
           showToast('Item moved back');
-        } else if (undoData.type === 'unlog') {
-          updateSource(undoData.data.sourceId, { copiedAt: undoData.data.copiedAt });
-          showToast('Logged again');
         }
 
         setUndoData(null);
@@ -16099,6 +16089,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       const filterRef = React.useRef(null);
       // Source pending a delete-or-move-to-today decision (recycle bin button)
       const [actionSource, setActionSource] = React.useState(null);
+      const [unlogTarget, setUnlogTarget] = React.useState(null);
       // Choosing sources to copy (see copySelected).
       const [selecting, setSelecting] = React.useState(false);
       const [selectedIds, setSelectedIds] = React.useState(() => new Set());
@@ -16499,7 +16490,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                         {source.copiedAt && (
                           <button
                             className="log-btn"
-                            onClick={(e) => { e.stopPropagation(); if (!selecting) unlogSource(source.id); }}
+                            onClick={(e) => { e.stopPropagation(); if (!selecting) setUnlogTarget(source); }}
                             title={`Logged ${new Date(source.copiedAt).toLocaleDateString()} — tap to un-log`}
                             aria-label="Logged — tap to un-log"
                           >
@@ -16560,6 +16551,27 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 </button>
                 <button type="button" className="btn btn-primary" onClick={handleActionMove}>
                   Move to Today
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className={`modal-overlay ${unlogTarget ? 'show' : ''}`} onClick={() => setUnlogTarget(null)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <span className="modal-title">Un-log?</span>
+                <button type="button" className="modal-close" onClick={() => setUnlogTarget(null)}>&times;</button>
+              </div>
+              <div className="modal-body" style={{ padding: '1.5rem' }}>
+                <p style={{ fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word', margin: '0 0 1.25rem', fontSize: '1rem' }}>{unlogTarget?.title || ''}</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>
+                  {unlogTarget?.copiedAt ? `Logged ${new Date(unlogTarget.copiedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}. ` : ''}Mark it as not logged, here and on your other devices?
+                </p>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setUnlogTarget(null)}>Cancel</button>
+                <button type="button" className="btn btn-primary log-offer-btn" onClick={() => { unlogSource(unlogTarget.id); setUnlogTarget(null); }}>
+                  <Icons.NotLogged /> Un-log
                 </button>
               </div>
             </div>
