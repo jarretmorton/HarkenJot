@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.74.0';
+    const APP_VERSION = '1.74.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -5631,8 +5631,11 @@ the later \`updatedAt\` wins, field by field.
 3. **Change only the state fields you own,** and stamp each one you change with \`updatedAt\` (now,
    UTC — never a time in the future) and \`by\` (your agent's name). Leave every other field exactly
    as you found it.
-4. **Write with the file's \`sha\`.** Use \`PUT /repos/{owner}/{repo}/contents/{path}\` with the \`sha\`
-   you just read. On a 409 or 422, read the file again, re-apply your change and retry.
+4. **Never overwrite a change you haven't seen.** Write one of two ways:
+   - **Git:** fetch, commit on top of \`origin/main\`, and push without force. If the push is
+     refused, fetch, rebase onto \`origin/main\` and push again.
+   - **Contents API:** \`PUT /repos/{owner}/{repo}/contents/{path}\` with the \`sha\` you just read.
+     On a 409 or 422, read the file again, re-apply your change and retry.
 5. **Append to \`ai-notes.jsonl\`; never rewrite lines.** One object per line:
    \`{"id": "<unique>", "by": "<agent>", "createdAt": "<ISO UTC>", "text": "…"}\`.
 

@@ -712,6 +712,8 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
   (see **A media source can arrive without anything to play**).
 - **v1.70.1** looked up the channel name of a video that arrived without one.
 - **v1.73.0** made `copiedAt` (the app's **Logged**) an ordinary register, so an un-log syncs.
+- **v1.74.1** let an agent write `state.json` with a non-force git push as well as the contents API
+  (README rule 4). The Claude GitHub App allows git but blocks REST writes.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -1009,8 +1011,8 @@ allowed to read that header. Thrown errors carry a `userMessage` and never a hea
 
 **The repo's README is the agent contract** (`LIBRARY_REPO_README`). It covers the layout, the register
 format, how to add a source and set `copiedAt`, and the rules: never write `notes.json`, never delete
-files, and write with the file's `sha` and retry on conflict. Initialize writes it once; the app never
-merges it afterwards.
+files, and never overwrite an unseen change (a non-force git push, or a contents-API write with the
+file's `sha`). Initialize writes it once; the app never merges it afterwards.
 
 **The token** lives in `localStorage` under `harkenjot_gh_token` only. It is never in `HJStore`, an
 export, a URL or a log line. Pointing Settings at a new repo downloads a `-before-sync` backup first.
