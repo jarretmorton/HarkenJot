@@ -20,6 +20,7 @@ NotebookLM.png          # NotebookLM logo asset (not referenced by the app or RE
 .nojekyll               # Tells GitHub Pages to serve the repo root as-is (no Jekyll)
 site.webmanifest        # PWA manifest (name, theme colour, icon set)
 tests/copy-format.test.mjs  # Node checks for the copy format (sliced out of HarkenJot.html)
+tests/sync-repo-name.test.mjs  # Node checks for sync's repo-name matching (sliced out of HJSyncCore)
 apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
 icon-android-192.png    # Android / PWA icon (padded + badge-aware)
 icon-android-512.png    # Android / PWA icon (padded + badge-aware)
@@ -481,7 +482,8 @@ There is no test suite for the app as a whole; verify changes manually in the br
 exception is the copy format: `node tests/copy-format.test.mjs` (no dependencies) slices the code
 between the `/* HJCOPY-START */` and `/* HJCOPY-END */` markers out of `HarkenJot.html` and checks
 it against expected Markdown. Run it after touching anything in that block, and keep the block free of
-DOM, storage and network calls so it keeps working.
+DOM, storage and network calls so it keeps working. `node tests/sync-repo-name.test.mjs` slices
+`HJSyncCore` the same way and checks `sameRepo`.
 
 ### No Linter or Formatter
 
@@ -714,6 +716,8 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
 - **v1.73.0** made `copiedAt` (the app's **Logged**) an ordinary register, so an un-log syncs.
 - **v1.74.1** let an agent write `state.json` with a non-force git push as well as the contents API
   (README rule 4). The Claude GitHub App allows git but blocks REST writes.
+- **v1.74.2** made the repo name case-insensitive wherever this device's sync record is matched to
+  Settings (see **A repo name differing only in case is the same repo**).
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -1016,6 +1020,14 @@ file's `sha`). Initialize writes it once; the app never merges it afterwards.
 
 **The token** lives in `localStorage` under `harkenjot_gh_token` only. It is never in `HJStore`, an
 export, a URL or a log line. Pointing Settings at a new repo downloads a `-before-sync` backup first.
+
+**A repo name differing only in case is the same repo** (`HJSyncCore.sameRepo`, v1.74.2). GitHub
+resolves `owner/Library` and `owner/library` to one repo, so renaming the library repo's case on
+github.com needs no change here. Before v1.74.2, `sync_meta.repo` was compared exactly, so retyping the
+name in a new case counted as a new repo: a `-before-sync` backup, a forgotten sync record (a full tree
+read on the next pull) and Initialize offered again. All three checks go through `sameRepo`: the pull's
+reuse of `sync_meta`, `repoChanged` in Settings, and the Initialize gate. Branch names stay exact,
+because git treats them as case-sensitive.
 
 **Testing.** `HJSyncCore` uses only `getReadStatus`, `normalizeUrlKey`, `crypto.subtle` and
 `TextEncoder`. A Node harness can therefore slice it out between the `/* HJSYNC-CORE-START */` and
