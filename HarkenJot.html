@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.74.1';
+    const APP_VERSION = '1.74.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4491,7 +4491,12 @@
         return hex(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(lines.join('\n')))).slice(0, 8);
       };
 
-      return { SCHEMA_VERSION, STATUS_TO_REPO, canonical, mergeState, mergeNotes, mergeFailedLinks, mergeFile, libraryToFiles, filesToLibrary, stateFields, isSyncedPath, folderOf, emptyClock, gitBlobSha, fingerprint };
+      // GitHub treats owner and repo names as case-insensitive, so the sync
+      // record for "owner/Library" is the record for "owner/library" too.
+      // Branch names stay exact: git treats them as case-sensitive.
+      const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+
+      return { SCHEMA_VERSION, STATUS_TO_REPO, sameRepo, canonical, mergeState, mergeNotes, mergeFailedLinks, mergeFile, libraryToFiles, filesToLibrary, stateFields, isSyncedPath, folderOf, emptyClock, gitBlobSha, fingerprint };
     })();
     /* HJSYNC-CORE-END */
 
@@ -5278,7 +5283,7 @@
         const head = await this._headCommit(branch);
         if (!head) throw this._fail('The repo is empty — run Initialize from the device whose library is most complete.');
         const stored = HJStore.get('sync_meta');
-        const meta = stored && stored.repo === repoKey && stored.branch === branch ? stored : null;
+        const meta = stored && HJSyncCore.sameRepo(stored.repo, repoKey) && stored.branch === branch ? stored : null;
 
         let remote = meta ? meta.shas : {};
         let treeSha = meta ? meta.tree : null;
@@ -15751,7 +15756,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           showToast('Use a fine-grained token (it starts with github_pat_) limited to the library repo');
           return;
         }
-        const repoChanged = !config || config.owner !== parsed.owner || config.repo !== parsed.repo;
+        const repoChanged = !config || !HJSyncCore.sameRepo(`${config.owner}/${config.repo}`, `${parsed.owner}/${parsed.repo}`);
         // Pointing sync at a repo is the moment to have a copy of the library
         // that no sync code has touched.
         if (repoChanged) backupNow('before-sync');
@@ -15821,7 +15826,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // holds a record of the configured repo (it initialized it, or has pulled
       // from it), the repo holds a library and Initialize could only refuse.
       const syncMeta = HJStore.get('sync_meta');
-      const initialized = !!(config && syncMeta && syncMeta.repo === `${config.owner}/${config.repo}` && syncMeta.branch === (config.branch || 'main'));
+      const initialized = !!(config && syncMeta && HJSyncCore.sameRepo(syncMeta.repo, `${config.owner}/${config.repo}`) && syncMeta.branch === (config.branch || 'main'));
 
       const handleInitialise = () => {
         if (!confirm(`Write this library — ${sources.length} sources and ${notes.length} notes — into ${config.owner}/${config.repo}?\n\nIt goes in as one commit and only into a repo that has never held a library. A backup downloads first.`)) return;
