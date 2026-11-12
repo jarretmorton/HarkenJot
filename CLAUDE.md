@@ -1165,7 +1165,7 @@ article's JSON (100–200 KB). Both now get 15 s. The article chain's stagger is
 2 s rather than 2.5 s so five racers cost about what four did. In `fetchContent`'s
 article fallbacks, Wayback/AMP/WordPress/Jina run concurrently but are awaited
 in preference order; Jina is only started after tier-1 extraction fails (its
-keyless tier is rate-limited).
+keyless tier is rate-limited), except on the head-start hosts below.
 
 **archive.org being unreachable is not the same as there being no snapshot.**
 Both the availability API and the snapshot fetch can die as a bare
@@ -1199,6 +1199,26 @@ the next article from that publisher gets the same head start instead of paying
 the chain's ~15 s to lose again. A later tier-1 success clears the hint, and it
 expires after a week regardless, so a temporary block doesn't stick.
 
+**A head start is only worth having if the winner is allowed to finish first**
+(v1.75.0). Until then the head-started routes ran beside the chain, but the load
+still awaited the chain's full ~12 s before looking at them — on exactly the hosts
+where it was expected to lose. Now whichever route brings back article-sized text
+first ends the wait (`firstArticleSized`). A fallback that wins still gives the
+page `CHAIN_GRACE_MS` (2 s) to land, because the page's DOM extraction is the
+cleaner copy (Jina's markdown keeps the site footer); after that the chain is
+aborted through `pageCtrl`, and an aborted chain leaves the proxy-dead hint alone.
+
+`READER_RACE_HOSTS` (`anthropic.com`, `claude.com`) start **only Jina** beside the
+chain. Those hosts are not walled, and the page normally wins, but their 150–300 KB
+App Router pages sit behind Cloudflare, and a chain that came back empty cost
+~12 s before the walk began and ~30 s in all. One Jina request per load is well
+inside its keyless limit.
+
+Measured in Chromium with every route mocked at fixed delays (not against the live
+services, which this repo's sessions cannot reach): proxies dead on Anthropic went
+from 32.5 s to 7 s, Forbes from 24 s to 7 s; with working proxies nothing changed
+(3.1 s both ways).
+
 **A short post is not a truncated one.** `THIN_ARTICLE_CHARS` exists to catch
 paywall stubs, but company newsrooms routinely publish complete 400–900 char
 announcements. Those used to pay for every fallback tier — and because no tier
@@ -1211,7 +1231,11 @@ that passes is banked immediately and skips the fallbacks entirely.
 
 Once *any* result is in hand the rest of the walk is a hunt for a better one, so
 it runs under an 8 s grace window rather than the sum of the remaining tiers'
-timeouts. With nothing in hand there is no grace — the alternative to waiting is
+timeouts. Results also count **out of order** (v1.75.0): preference order says
+which result to keep, not that a later tier's article should sit unread while an
+earlier tier runs out its timeout. Once any tier has article-sized text, the tiers
+ahead of it get `PREFERENCE_GRACE_MS` (3 s), and then the walk takes what has
+landed, in preference order. With nothing in hand there is no grace — the alternative to waiting is
 a manual paste, so the walk runs to the end. `tryArchiveToday` races `archive.ph`
 and `archive.is` through `raceStaggered` (both are front doors onto the same
 archive) instead of trying them serially, where a dead first mirror cost a whole
@@ -1306,6 +1330,25 @@ chain, and if that misses, `looksLikeSubstack()` reads the fetched page markup �
 as a fallback tier, so a new custom domain works without a code change. An API
 body under `THIN_ARTICLE_CHARS` is a subscriber preview: it is kept as a floor
 for the pipeline, never banked and returned.
+
+**The API is preferred, not waited for** (v1.75.0, `fetchSubstackApi`). Three
+changes keep a slow route from adding its time to a fast one:
+
+- **A direct fetch races the proxies.** If the browser may read the reply, it
+  skips the proxies entirely; if CORS refuses it, it costs one quick request.
+  Whether Substack sends `Access-Control-Allow-Origin` was not verifiable from
+  this repo's sessions, so the trace line `Substack API direct → … succeeded` /
+  `refused` is how to find out.
+- **The page fetch runs alongside the API**, after a `SUBSTACK_PAGE_HEAD_START_MS`
+  (2.5 s) head start on a known Substack and at once on an unknown `/p/` host.
+  It used to queue behind the API, so a non-Substack blog with a `/p/` path paid
+  for the probe first.
+- **Once the page has an article, the API gets `SUBSTACK_API_GRACE_MS` (2 s)**
+  and is then aborted. A dead API used to run out the whole chain (~12 s) while
+  the finished page waited.
+
+`startPageFetch` is the one place the page is fetched, so whichever path starts it
+first, the main path reuses that request rather than issuing a second.
 
 The fallback order is Substack API → Wayback → archive.today → AMP → WordPress → Jina. The two
 archive routes lead because a WAF blocks the *publisher's* origin, not the

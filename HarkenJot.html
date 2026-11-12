@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.74.2';
+    const APP_VERSION = '1.75.0';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -3455,9 +3455,11 @@
     // resolves null once every task has settled without a winner. Hand-rolled instead of
     // Promise.any so a null/invalid result counts as a failure. The stagger keeps us from
     // hammering every free CORS proxy at once while still bounding a slow first choice.
-    const raceStaggered = (taskFns, { staggerMs = 2500 } = {}) =>
+    // An outer `signal` cancels the whole race (resolving null), for a caller whose
+    // other route has already won.
+    const raceStaggered = (taskFns, { staggerMs = 2500, signal } = {}) =>
       new Promise((resolve) => {
-        if (!taskFns.length) { resolve(null); return; }
+        if (!taskFns.length || signal?.aborted) { resolve(null); return; }
         let settled = false;
         let pending = taskFns.length;
         const ctrls = taskFns.map(() => new AbortController());
@@ -3480,6 +3482,7 @@
           if (i === 0) start();
           else timers.push(setTimeout(start, i * staggerMs));
         });
+        if (signal) signal.addEventListener('abort', () => finish(null), { once: true });
       });
 
     // Fetch a URL from inside a sandboxed iframe, so the request carries the
@@ -6196,6 +6199,20 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     const isBotWalledHost = (url) => {
       const h = safeHostname(url).replace(/^www\./, '');
       return BOT_WALLED_HOSTS.some(d => h === d || h.endsWith('.' + d));
+    };
+
+    // Hosts where Jina Reader starts alongside the proxy chain instead of after
+    // it has failed. Not walled — the chain usually works here — but slow to lose
+    // when it doesn't: Anthropic's App Router pages are 150-300 KB of HTML behind
+    // Cloudflare, and a chain that comes back empty cost ~12s before the fallback
+    // walk even began. Jina is CORS-open and fetched directly, so running it from
+    // the start costs one request (well inside its keyless rate limit) and turns
+    // a dead chain into a few seconds instead of a stack of timeouts. The page
+    // still wins whenever it answers in time: its extraction is the cleaner copy.
+    const READER_RACE_HOSTS = ['anthropic.com', 'claude.com'];
+    const isReaderRaceHost = (url) => {
+      const h = safeHostname(url).replace(/^www\./, '');
+      return READER_RACE_HOSTS.some(d => h === d || h.endsWith('.' + d));
     };
 
     // Toast Component
@@ -9229,6 +9246,14 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           // meant the fallbacks never ran. Below it a result is kept as a floor
           // while the pipeline goes looking for something better.
           const THIN_ARTICLE_CHARS = 900;
+          // How long a known Substack's API runs alone before the page fetch joins
+          // it. Long enough that an API answering promptly wins without a second
+          // proxy request; short enough that a dead one costs this, not the ~12s
+          // the chain takes to give up.
+          const SUBSTACK_PAGE_HEAD_START_MS = 2500;
+          // How long the API, the cleaner copy, still gets once the page has an
+          // article in hand.
+          const SUBSTACK_API_GRACE_MS = 2000;
 
           // Helper: fetch HTML via CORS proxies. The roster lives at top level in
           // CORS_PROXIES — see the note there about why it is not inlined here.
@@ -9239,7 +9264,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           // habitually takes well over 8s to answer, so every archive attempt was
           // being aborted mid-flight and the tier with the best odds on a walled
           // publisher never got to return anything.
-          const fetchHtmlViaProxies = async (targetUrl, { timeoutMs = 8000 } = {}) => {
+          const fetchHtmlViaProxies = async (targetUrl, { timeoutMs = 8000, signal } = {}) => {
             // Returns true when a string appears to be binary/compressed data rather than
             // readable text. TextDecoder replaces invalid UTF-8 byte sequences with U+FFFD;
             // a high density of replacement chars or C0 control chars indicates raw bytes.
@@ -9334,7 +9359,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                 console.log(`[HJ:net] ${proxy.name} → ${targetUrl} failed:`, error.message);
                 return null;
               }
-            }), { staggerMs: 2000 });
+            }), { staggerMs: 2000, signal });
           };
 
           // Helper: try to extract article content from HTML, returns null if insufficient
@@ -9376,6 +9401,63 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             if (!extracted) return null;
             return { title: data.title || extracted.title, text: extracted.text };
           };
+
+          // Helper: a Substack API post, by whichever route answers first. A direct
+          // fetch runs alongside the proxies rather than ahead of them: when the
+          // browser may read the reply it skips the proxies outright (their 1-8s is
+          // most of a Substack load), and when CORS refuses it, it has cost one
+          // quick request and delayed nothing. `probe` is the cheap form for a host
+          // not yet known to be Substack — two proxies on a short leash, not the
+          // whole chain. Resolves the parsed post, or null.
+          const fetchSubstackApi = (apiUrl, { probe = false, signal: outer } = {}) => raceStaggered([
+            async (signal) => {
+              try {
+                const r = await fetchWithTimeout(apiUrl, 6000, { signal });
+                const parsed = r.ok ? parseSubstackPayload(await r.text()) : null;
+                console.log(`[HJ:article] Substack API direct → ${apiUrl}: ` +
+                  (parsed ? `succeeded (${parsed.text.length} chars)` : `http ${r.status}, no post`));
+                return parsed;
+              } catch (e) {
+                if (!signal.aborted) {
+                  console.log(`[HJ:article] Substack API direct → ${apiUrl} ` +
+                    (e.name === 'AbortError' ? 'no reply in 6s' : `refused (CORS or network): ${e.message}`));
+                }
+                return null;
+              }
+            },
+            // Taken off the head of the shared roster, so a retirement there
+            // reaches the probe too rather than leaving it on a dead proxy.
+            probe
+              ? (signal) => raceStaggered(CORS_PROXIES.slice(0, 2).map((proxy) => async (inner) => {
+                  try {
+                    const r = await fetchWithTimeout(proxy.url(apiUrl), 6000, { signal: inner });
+                    return r.ok ? parseSubstackPayload(corsProxyExtract(proxy, await r.text())) : null;
+                  } catch (e) { return null; }
+                }), { staggerMs: 1500, signal })
+              : async (signal) => parseSubstackPayload(await fetchHtmlViaProxies(apiUrl, { signal })),
+          ], { staggerMs: 0, signal: outer });
+
+          // Resolves the first of `tiers` ([promise, label] pairs) to come back with
+          // article-sized text, as { result, label }; null once all have settled
+          // without one. Used to stop waiting on a route that has already lost.
+          const firstArticleSized = (tiers) => new Promise((resolve) => {
+            let pending = tiers.length;
+            if (!pending) { resolve(null); return; }
+            const settle = () => { if (--pending === 0) resolve(null); };
+            tiers.forEach(([p, label]) => Promise.resolve(p).then((r) => {
+              if (r && r.text && r.text.length >= THIN_ARTICLE_CHARS) resolve({ result: r, label });
+              else settle();
+            }, settle));
+          });
+
+          // The page itself through the proxy chain, started on demand so that a
+          // route which might make it unnecessary (the Substack API, a bot-walled
+          // host's fallbacks, Jina on a host in READER_RACE_HOSTS) can run
+          // alongside it instead of in front of it. pageCtrl stops it once some
+          // other route has the article.
+          const pageCtrl = new AbortController();
+          let pageP = null;
+          const startPageFetch = () => pageP || (pageP = fetchHtmlViaProxies(url, { signal: pageCtrl.signal }));
 
           // Helper: WordPress REST API article fetch. WordPress sites
           // (thenewstack.io and many others) expose
@@ -10189,9 +10271,12 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           // Strategy 0.5: Substack JSON API early path
           // Substack and custom-domain Substack sites (latent.space, astralcodexten.com,
           // etc.) expose <origin>/api/v1/posts/<slug>, which returns clean body_html.
-          // Try this BEFORE the standard proxy chain — otherwise the proxy chain
-          // happily returns paywall previews or comment-only HTML that passes the
-          // length gate, and we never reach a clean fallback.
+          // Prefer it to the page — otherwise the proxy chain happily returns
+          // paywall previews or comment-only HTML that passes the length gate, and
+          // we never reach a clean fallback. Prefer, not wait for: the page fetch
+          // now starts alongside the API (after a short head start on a known
+          // Substack), so an API that never answers no longer costs the whole
+          // proxy chain before the page is even asked for.
           //
           // Supported URL shapes:
           //   <pub>.substack.com/p/<slug>             — web link
@@ -10231,29 +10316,46 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               // deliberately leaves it false so the fallback tier can come back
               // with the full chain once the page identifies itself as Substack.
               substackApi = { apiUrl, pageHost, chainTried: false };
-              let apiResponse = null;
+              // The page fetch is no longer queued behind the API. On a known
+              // Substack the API gets a short head start (it is the cleaner copy,
+              // and usually all that is needed); on a host that merely has a /p/
+              // path the API is a guess, so the page starts at once.
+              //
+              // Nor is the page held up by an API that never answers: once the page
+              // has an article of its own, the API gets SUBSTACK_API_GRACE_MS to
+              // land and is then abandoned. It used to run out the whole chain
+              // (~12s) while a finished page sat waiting.
               if (isKnownSubstack) {
                 showToast('Trying Substack API...');
                 substackApi.chainTried = true;
-                apiResponse = await fetchHtmlViaProxies(apiUrl);
-              } else {
-                // Two proxies, not one. This used to be a single call through
-                // corsproxy.io's bare `?<url>` form; that form stopped answering
-                // dependably, and its failure made every unrecognised custom-domain
-                // Substack look like an ordinary blog with a /p/ path. Taken off
-                // the head of the shared roster so a retirement there reaches the
-                // probe too, rather than leaving it pointing at a dead proxy again.
-                apiResponse = await raceStaggered(CORS_PROXIES.slice(0, 2).map((proxy) => async (signal) => {
-                  try {
-                    const r = await fetchWithTimeout(proxy.url(apiUrl), 6000, { signal });
-                    return r.ok ? corsProxyExtract(proxy, await r.text()) : null;
-                  } catch (e) { return null; }
-                }), { staggerMs: 1500 });
               }
-              const parsed = parseSubstackPayload(apiResponse);
+              const apiCtrl = new AbortController();
+              let apiSettled = false;
+              const apiP = fetchSubstackApi(apiUrl, { probe: !isKnownSubstack, signal: apiCtrl.signal });
+              apiP.then(() => { apiSettled = true; });
+              const PAGE_READY = Symbol('page-ready');
+              const pageReadyP = new Promise(r => setTimeout(r, isKnownSubstack ? SUBSTACK_PAGE_HEAD_START_MS : 0))
+                .then(() => (apiSettled ? null : startPageFetch()))
+                .then((h) => {
+                  const ex = h ? tryExtractArticle(h) : null;
+                  return ex && ex.text.length >= THIN_ARTICLE_CHARS ? PAGE_READY : null;
+                })
+                .catch(() => null);
+              let parsed = await new Promise((resolve) => {
+                apiP.then(resolve);
+                pageReadyP.then((r) => { if (r) resolve(r); });
+              });
+              if (parsed === PAGE_READY) {
+                parsed = await Promise.race([apiP, new Promise(r => setTimeout(() => r(null), SUBSTACK_API_GRACE_MS))]);
+                if (!parsed && !apiSettled) {
+                  apiCtrl.abort();
+                  console.log(`[HJ:article] Substack API slower than the page — going with the page (${apiUrl})`);
+                }
+              }
               if (parsed) {
                 if (!isKnownSubstack) netHints.recordSubstackHost(pageHost);
                 if (parsed.text.length >= THIN_ARTICLE_CHARS) {
+                  pageCtrl.abort();
                   const sentences = splitIntoSentences(parsed.text);
                   sentencesRef.current = sentences;
                   saveLoadedSource({ type: 'article', title: parsed.title, url, content: parsed.text });
@@ -10284,6 +10386,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
               showToast('Trying WordPress API...');
               const wp = await tryWordPressApi(url);
               if (wp) {
+                pageCtrl.abort();
                 const sentences = splitIntoSentences(wp.text);
                 sentencesRef.current = sentences;
                 saveLoadedSource({ type: 'article', title: wp.title, url, content: wp.text });
@@ -10317,7 +10420,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           if (proxyDead) console.log('[HJ:article] proxy chain failed here before — starting fallbacks up front', articleHost);
           const earlyWaybackP = preloadFallbacks ? fetchWayback().catch(() => null) : null;
           const earlyArchiveP = preloadFallbacks ? tryArchiveToday().catch(() => null) : null;
-          const earlyJinaP = preloadFallbacks ? tryJinaReader(url).catch(() => null) : null;
+          const earlyJinaP = (preloadFallbacks || isReaderRaceHost(url)) ? tryJinaReader(url).catch(() => null) : null;
           // WordPress joins the head start too. Its first tier is JSONP out of the
           // sandboxed frame — no proxy, no CORS, and the request leaves the
           // reader's own browser — which makes it the tier least bothered by the
@@ -10325,7 +10428,46 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           const earlyWpP = (preloadFallbacks && !wpApiAlreadyFailed)
             ? tryWordPressApi(url).catch(() => null) : null;
 
-          let html = await fetchHtmlViaProxies(url);
+          // With routes already running beside the chain, whichever brings back the
+          // article first ends the wait. This used to await the chain regardless,
+          // so on exactly the hosts where it was expected to lose, every load paid
+          // its full ~12s before a head-started fallback that had long since
+          // finished was even looked at. A fallback that wins still gives the
+          // page CHAIN_GRACE_MS to land, because the page's extraction is the
+          // cleaner copy (Jina's markdown keeps the site's footer, for one).
+          const CHAIN_GRACE_MS = 2000;
+          const earlyTiers = [
+            [earlyWaybackP, 'Wayback Machine'],
+            [earlyArchiveP, 'archive.today'],
+            [earlyWpP, 'WordPress REST API'],
+            [earlyJinaP, 'Jina reader'],
+          ].filter(([p]) => p);
+          let html = null;
+          let chainAnswered = true;
+          let earlyWinner = null;
+          if (earlyTiers.length) {
+            const chainP = startPageFetch();
+            const outcome = await new Promise((resolve) => {
+              chainP.then((h) => resolve({ html: h }));
+              firstArticleSized(earlyTiers).then((w) => { if (w) resolve({ early: w }); });
+            });
+            if (outcome.early) {
+              earlyWinner = outcome.early.result;
+              const CHAIN_LATE = Symbol('chain-late');
+              const late = await Promise.race([chainP, new Promise(r => setTimeout(() => r(CHAIN_LATE), CHAIN_GRACE_MS))]);
+              if (late === CHAIN_LATE) {
+                pageCtrl.abort();
+                chainAnswered = false;
+                console.log(`[HJ:article] ${outcome.early.label} had the article (${earlyWinner.text.length} chars) before the proxy chain — not waiting for it`);
+              } else {
+                html = late;
+              }
+            } else {
+              html = outcome.html;
+            }
+          } else {
+            html = await startPageFetch();
+          }
 
           // Check if the response is actually a PDF (not detected by URL pattern)
           if (html && html.substring(0, 10).includes('%PDF-')) {
@@ -10347,7 +10489,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             }
           }
 
-          let extracted = tryExtractArticle(html, `page ${url}`);
+          let extracted = chainAnswered ? tryExtractArticle(html, `page ${url}`) : null;
 
           // Remember whether the chain was worth walking, so the next article from
           // this publisher starts the working routes immediately instead of
@@ -10356,8 +10498,15 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
           // Judged on the chain's own result, before the Substack API candidate is
           // folded in below: that came from a different route entirely and says
           // nothing about whether the proxies got through.
+          // An aborted chain says nothing either way, so it leaves the hint alone.
           if (extracted) netHints.clearProxyDead(articleHost);
-          else netHints.recordProxyDead(articleHost);
+          else if (chainAnswered) netHints.recordProxyDead(articleHost);
+
+          // The head-started route that beat the chain, unless the page landed in
+          // its grace window with an article of its own.
+          if (earlyWinner && (!extracted || extracted.text.length < THIN_ARTICLE_CHARS)) {
+            extracted = earlyWinner;
+          }
 
           // A subscriber preview from the Substack API still beats what the page
           // gave us; the pipeline below tries to improve on it either way.
@@ -10402,7 +10551,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             const substackP = (substackApi && !substackApi.chainTried && !earlyCandidate && looksLikeSubstack(html))
               ? (async () => {
                   console.log('[HJ:article] page markup is Substack — trying its API');
-                  const parsed = parseSubstackPayload(await fetchHtmlViaProxies(substackApi.apiUrl));
+                  const parsed = await fetchSubstackApi(substackApi.apiUrl);
                   if (parsed) netHints.recordSubstackHost(substackApi.pageHost);
                   return parsed;
                 })().catch(() => null)
@@ -10471,20 +10620,51 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
             // timeouts — a tier that has not answered within the grace window is
             // one nobody is waiting on. With nothing in hand there is no such
             // trade: keep waiting, because the alternative is a manual paste.
+            //
+            // The same applies out of order. Preference order says which result
+            // to keep, not that a later tier's article should sit unread while an
+            // earlier tier runs out its timeout: archive.today alone can take 15s
+            // to fail, and Jina's article waited behind it. So once *any* tier has
+            // article-sized text, the tiers ahead of it get PREFERENCE_GRACE_MS
+            // more to beat it, and then the walk settles for what has landed.
             const FALLBACK_GRACE_MS = 8000;
+            const PREFERENCE_GRACE_MS = 3000;
             const GRACE = Symbol('grace');
-            let graceP = null;
+            let graceResolve;
+            const graceP = new Promise(r => { graceResolve = r; });
+            let graceDeadline = Infinity;
+            let graceTimer = null;
+            // A grace window only ever shortens: arming a later deadline is a no-op.
+            const armGrace = (ms) => {
+              const at = Date.now() + ms;
+              if (at >= graceDeadline) return;
+              graceDeadline = at;
+              clearTimeout(graceTimer);
+              graceTimer = setTimeout(() => graceResolve(GRACE), ms);
+            };
+            const landed = new Map();
+            fallbackTiers.forEach(([tierPromise, label]) => tierPromise.then((r) => {
+              landed.set(label, r);
+              if (r && r.text && r.text.length >= THIN_ARTICLE_CHARS) armGrace(PREFERENCE_GRACE_MS);
+            }, () => landed.set(label, null)));
+            const walked = new Set();
             for (const [tierPromise, label] of fallbackTiers) {
-              if (best && !graceP) {
-                graceP = new Promise(r => setTimeout(() => r(GRACE), FALLBACK_GRACE_MS));
-              }
-              const result = graceP ? await Promise.race([tierPromise, graceP]) : await tierPromise;
+              if (best) armGrace(FALLBACK_GRACE_MS);
+              const result = await Promise.race([tierPromise, graceP]);
               if (result === GRACE) {
-                console.log(`[HJ:article] fallback grace window elapsed at "${label}" — keeping best result so far (${best.text.length} chars)`);
+                // Tiers further down that have already answered still count, in
+                // preference order — one of them is usually why the window closed.
+                for (const [, laterLabel] of fallbackTiers) {
+                  if (walked.has(laterLabel) || !landed.has(laterLabel)) continue;
+                  if (consider(landed.get(laterLabel), laterLabel)) break;
+                }
+                console.log(`[HJ:article] fallback grace window elapsed at "${label}" — keeping best result so far (${best ? best.text.length : 0} chars)`);
                 break;
               }
+              walked.add(label);
               if (consider(result, label)) break;
             }
+            clearTimeout(graceTimer);
             extracted = best;
           }
 
