@@ -21,6 +21,7 @@ NotebookLM.png          # NotebookLM logo asset (not referenced by the app or RE
 site.webmanifest        # PWA manifest (name, theme colour, icon set)
 tests/copy-format.test.mjs  # Node checks for the copy format (sliced out of HarkenJot.html)
 tests/sync-repo-name.test.mjs  # Node checks for sync's repo-name matching (sliced out of HJSyncCore)
+tests/markdown-text.test.mjs  # Node checks for markdownToReadableText's line joining (between the HJMD markers)
 apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
 icon-android-192.png    # Android / PWA icon (padded + badge-aware)
 icon-android-512.png    # Android / PWA icon (padded + badge-aware)
@@ -483,7 +484,9 @@ exception is the copy format: `node tests/copy-format.test.mjs` (no dependencies
 between the `/* HJCOPY-START */` and `/* HJCOPY-END */` markers out of `HarkenJot.html` and checks
 it against expected Markdown. Run it after touching anything in that block, and keep the block free of
 DOM, storage and network calls so it keeps working. `node tests/sync-repo-name.test.mjs` slices
-`HJSyncCore` the same way and checks `sameRepo`.
+`HJSyncCore` the same way and checks `sameRepo`. `node tests/markdown-text.test.mjs` slices
+`markdownToReadableText` between the `HJMD` markers (with `decodeEntities` stubbed, since the app's
+uses a DOM textarea) and checks how wrapped lines join.
 
 ### No Linter or Formatter
 
@@ -1519,6 +1522,15 @@ speak and `splitIntoSentences` can index, and two rules shape all of it:
   of pipe-separated links. A bare URL keeps **only its host**: the reader renders
   no anchors to follow, but deleting the URL outright breaks the sentence it sat
   in ("See for a list of forums").
+
+**A line break is not a block break** (v1.75.1). Docs in a repo are often
+hard-wrapped at 80 columns, so a sentence routinely continues on the next line.
+Lines are joined with a space until something markdown counts as a block
+boundary: a blank line, a heading, a fence, a rule, a table, a quote under a list
+item, or the next list item. List items used to end on their first line, so every
+wrap inside one got a full stop ("cites PubChem. (pubchem…"). An open item is held
+by `inItem`, which also stops a `---` after an item being read as a setext
+underline (it is a rule there). Checked by `tests/markdown-text.test.mjs`.
 
 Four things the format imposes, each of which corrupted prose before:
 

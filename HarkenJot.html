@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.75.0';
+    const APP_VERSION = '1.75.1';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -5895,6 +5895,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
     // fences and emoji shortcodes are noise read aloud; a bare URL keeps only
     // its host, because the reader renders no anchors to follow but deleting the
     // URL outright breaks the sentence it sat in.
+    /* HJMD-START */
     const markdownToReadableText = (md) => {
       if (!md) return { title: '', text: '' };
 
@@ -5975,8 +5976,16 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         return cells.length > 0 && cells.every(c => /^:?-+:?$/.test(c));
       };
 
+      // A single newline is not a block boundary. Hard-wrapped markdown (docs
+      // written at 80 columns) breaks paragraphs and list items mid-sentence, and
+      // every line in `buf` is joined with a space, so a block only ends where
+      // markdown ends one: a blank line, a heading, a fence, a rule, a table, the
+      // next list item. List items used to flush on their first line, which
+      // turned every wrap inside one into a sentence end ("cites PubChem.
+      // (pubchem…"). `inItem` keeps the item open for its continuation lines.
       const blocks = [];
       let buf = [];
+      let inItem = false;
       let fence = null;
       let inTable = false;
       let title = '';
@@ -5987,6 +5996,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       };
 
       const flush = () => {
+        inItem = false;
         if (!buf.length) return;
         const raw = buf.join(' ');
         buf = [];
@@ -6025,8 +6035,9 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         if (/^\[[^^\]][^\]]*\]:[ \t]*\S+(?:[ \t]+["'(].*)?$/.test(trimmed)) { flush(); continue; }
 
         // A setext underline, checked ahead of the horizontal rule it looks like,
-        // because the line above it is the heading.
-        if (buf.length && /^(=+|-+)[ \t]*$/.test(trimmed)) {
+        // because the line above it is the heading. Not under a list item: there
+        // "---" is a rule ending the list, and the item is not a heading.
+        if (buf.length && !inItem && /^(=+|-+)[ \t]*$/.test(trimmed)) {
           const raw = buf.join(' ');
           buf = [];
           pushHeading(raw, trimmed[0] === '=');
@@ -6046,7 +6057,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         if (isAlignmentRow(trimmed)) {
           // The header row is still buffered — re-read it as cells rather than
           // letting it out as a paragraph with pipes through the middle of it.
-          if (buf.length === 1 && buf[0].includes('|')) buf[0] = tableCells(buf[0]).filter(Boolean).join(', ');
+          if (buf.length === 1 && !inItem && buf[0].includes('|')) buf[0] = tableCells(buf[0]).filter(Boolean).join(', ');
           flush();
           inTable = true;
           continue;
@@ -6065,19 +6076,22 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         // Each list item is its own sentence: a README is mostly lists, and run
         // together they read as one unpunctuated wall. The task-list checkbox
         // needs the space after it checked, or "- [X](https://x.com/vuejs)" is
-        // read as a ticked box and loses its link text.
+        // read as a ticked box and loses its link text. The item stays open so
+        // its wrapped lines join it; the next item or a blank line closes it.
         const bullet = trimmed.match(/^(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)$/);
         if (bullet) {
           flush();
           buf.push(bullet[1].replace(/^\[[ xX]\](?=[ \t]|$)[ \t]*/, ''));
-          flush();
+          inItem = true;
           continue;
         }
 
         // A blockquote reads as the text it quotes. GitHub's alert syntax
         // (> [!NOTE]) is a rendering hint, so name it instead of reading it.
+        // A quote under a list item is its own block, not more of the item.
         let content = trimmed;
         if (content[0] === '>') {
+          if (inItem) flush();
           content = content.replace(/^(?:>[ \t]?)+/, '').trim();
           const alert = content.match(/^\[!([A-Za-z]+)\][ \t]*(.*)$/);
           if (alert) {
@@ -6102,6 +6116,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 
       return { title, text: blocks.join(' ').replace(/\s+/g, ' ').trim() };
     };
+    /* HJMD-END */
     // Bot walls, CAPTCHA interstitials and "access denied" shells are served
     // with HTTP 200 and carry enough boilerplate to clear an extraction length
     // gate, so they get saved as the article and the entire fallback chain is
