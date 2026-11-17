@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.75.1';
+    const APP_VERSION = '1.75.2';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -4228,6 +4228,48 @@
       const canonical = (v) => JSON.stringify(sortKeys(v), null, 2) + '\n';
       const ms = (iso) => { const n = Date.parse(iso); return isFinite(n) ? n : 0; };
 
+      // The library groups by date and draws sources in array order, so the
+      // array has to stay newest createdAt first. Order is never synced: each
+      // device keeps it, which is why both of these only ever move sources and
+      // never change one.
+      //
+      // Stable, so sources with the same timestamp keep their order; an array
+      // already in order comes back as itself, so nothing reads it as changed.
+      const sortSourcesByDate = (list) => {
+        for (let i = 1; i < list.length; i++) {
+          if (ms(list[i].createdAt) > ms(list[i - 1].createdAt)) {
+            return list.slice().sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
+          }
+        }
+        return list;
+      };
+      // The patch a pull applies to the library. A source goes ahead of the
+      // first older one, so after any with the same timestamp.
+      const patchSources = (prev, ops) => {
+        const removed = new Set(ops.remove);
+        const place = (list, src) => {
+          const t = ms(src.createdAt);
+          const i = list.findIndex(s => ms(s.createdAt) < t);
+          return i < 0 ? list.concat([src]) : list.slice(0, i).concat([src], list.slice(i));
+        };
+        // A new createdAt (Move to Today on another device) moves the source
+        // too: patched in place, today's group would open below the old one.
+        // Every moved source comes out before any goes back. Placed one at a
+        // time among the rest, a source could stop at another still waiting at
+        // its old spot with its new, older date — three dates restored in one
+        // pull once left a Sept 10 source above the Nov 13 group.
+        const moved = new Set(Object.keys(ops.patch).filter(id => 'createdAt' in ops.patch[id]));
+        const patched = prev.filter(s => !removed.has(s.id)).map(s => ops.patch[s.id] ? { ...s, ...ops.patch[s.id] } : s);
+        let next = patched.filter(s => !moved.has(s.id));
+        patched.filter(s => moved.has(s.id)).forEach(src => { next = place(next, src); });
+        const have = new Set(next.map(s => s.id));
+        ops.insert.forEach(src => {
+          if (have.has(src.id)) return;
+          next = place(next, src);
+        });
+        return next;
+      };
+
       // Total order on stamped records: later updatedAt, then device name, then
       // canonical text. Every tie still has exactly one winner, so the result
       // never depends on which side happens to be "local".
@@ -4462,7 +4504,7 @@
             });
           }
         });
-        out.sources.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
+        out.sources = sortSourcesByDate(out.sources);
         if (files['failed-links.json']) {
           const links = JSON.parse(files['failed-links.json']).links || {};
           Object.keys(links).forEach(k => {
@@ -4499,7 +4541,7 @@
       // Branch names stay exact: git treats them as case-sensitive.
       const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 
-      return { SCHEMA_VERSION, STATUS_TO_REPO, sameRepo, canonical, mergeState, mergeNotes, mergeFailedLinks, mergeFile, libraryToFiles, filesToLibrary, stateFields, isSyncedPath, folderOf, emptyClock, gitBlobSha, fingerprint };
+      return { SCHEMA_VERSION, STATUS_TO_REPO, sameRepo, sortSourcesByDate, patchSources, canonical, mergeState, mergeNotes, mergeFailedLinks, mergeFile, libraryToFiles, filesToLibrary, stateFields, isSyncedPath, folderOf, emptyClock, gitBlobSha, fingerprint };
     })();
     /* HJSYNC-CORE-END */
 
@@ -4990,28 +5032,9 @@
       },
 
       // The same patch App applies to its state, as a pure function, so a pull
-      // can also work out the library it is leaving behind.
-      patchSources(prev, ops) {
-        const removed = new Set(ops.remove);
-        // The library groups by date and orders by position in the array, so
-        // a source goes where its createdAt says.
-        const place = (list, src) => {
-          const t = Date.parse(src.createdAt) || 0;
-          const i = list.findIndex(s => (Date.parse(s.createdAt) || 0) < t);
-          return i < 0 ? list.concat([src]) : list.slice(0, i).concat([src], list.slice(i));
-        };
-        // A new createdAt (Move to Today on another device) moves the source
-        // too: patched in place, today's group would open below the old one.
-        const moved = new Set(Object.keys(ops.patch).filter(id => 'createdAt' in ops.patch[id]));
-        let next = prev.filter(s => !removed.has(s.id)).map(s => ops.patch[s.id] ? { ...s, ...ops.patch[s.id] } : s);
-        next.filter(s => moved.has(s.id)).forEach(src => { next = place(next.filter(s => s !== src), src); });
-        const have = new Set(next.map(s => s.id));
-        ops.insert.forEach(src => {
-          if (have.has(src.id)) return;
-          next = place(next, src);
-        });
-        return next;
-      },
+      // can also work out the library it is leaving behind. It lives in
+      // HJSyncCore so the ordering can be tested in Node.
+      patchSources(prev, ops) { return HJSyncCore.patchSources(prev, ops); },
       patchNotes(prev, ops) {
         const removedSources = new Set(ops.remove);
         const drop = new Set(ops.noteRemove);
@@ -6606,7 +6629,11 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
       // saved session yet; for those the restore is deferred until first shown.
       const [restoredSession] = useState(() => (document.visibilityState === 'visible' ? getRestorableSession() : null));
       const [activeTab, setActiveTab] = useState(restoredSession ? restoredSession.tab : 'library');
-      const [sources, setSources] = useState(() => HJStore.get('sources') || []);
+      // Re-sorted by date on load, so a library left out of order (a pull before
+      // v1.75.2 that moved several sources at once) fixes itself. Done here
+      // rather than in an effect: syncPrevRef starts from this same array, so
+      // the recorder never sees the reorder as an edit and no sync is scheduled.
+      const [sources, setSources] = useState(() => HJSyncCore.sortSourcesByDate(HJStore.get('sources') || []));
       const [currentSource, setCurrentSource] = useState(restoredSession ? restoredSession.source : null);
       const [notes, setNotes] = useState(() => HJStore.get('notes') || []);
       // Links that failed to load.

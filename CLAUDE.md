@@ -22,6 +22,7 @@ site.webmanifest        # PWA manifest (name, theme colour, icon set)
 tests/copy-format.test.mjs  # Node checks for the copy format (sliced out of HarkenJot.html)
 tests/sync-repo-name.test.mjs  # Node checks for sync's repo-name matching (sliced out of HJSyncCore)
 tests/markdown-text.test.mjs  # Node checks for markdownToReadableText's line joining (between the HJMD markers)
+tests/library-order.test.mjs  # Node checks that a pull and the load-time sort keep sources newest first (sliced out of HJSyncCore)
 apple-touch-icon.png    # 180×180 iOS home-screen icon (full bleed)
 icon-android-192.png    # Android / PWA icon (padded + badge-aware)
 icon-android-512.png    # Android / PWA icon (padded + badge-aware)
@@ -175,9 +176,9 @@ Line numbers are approximate — they drift as the file grows. Search for the na
 | 3017–3073 | `linkTrace` — bounded diagnostics buffer for the `[HJ:]` log stream (see **Saving a link that failed to load**) |
 | 3570–3793 | `HJStore` — IndexedDB-backed persistence with an in-memory cache (localStorage fallback) |
 | 3661–3670 | Legacy localStorage rename migration (`marginalia_` → `harkenjot_`) |
-| 3796–4101 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
+| 3796–4101 | `HJSyncCore` — GitHub sync's repo file formats and merge rules, and library order (`patchSources`, `sortSourcesByDate`), pure (between the `HJSYNC-CORE-START`/`END` markers; see **GitHub sync**) |
 | 4111–4462 | `HJSync` — per-device sync settings, the token, the local change recorder (`sync_clock`), and the GitHub client (`checkConnection`, `initialiseRepo`) |
-| 4463–4886 | `HJSync` pull — `pull` / `_pullOnce` / `_applyPulled`, the status and log, `patchSources` / `patchNotes` |
+| 4463–4886 | `HJSync` pull — `pull` / `_pullOnce` / `_applyPulled`, the status and log, `patchSources` (delegates to `HJSyncCore`) / `patchNotes` |
 | 4887–4945 | `LIBRARY_REPO_README` — the library repo's README: the contract for agents |
 | 4946–4981 | `downloadLibraryBackup` — the library JSON export behind Settings → Back up |
 | 5089–5468 | `parseGitHubUrl` + `markdownToReadableText` — GitHub link recognition and the GFM-markdown-to-reading-text converter |
@@ -484,7 +485,8 @@ exception is the copy format: `node tests/copy-format.test.mjs` (no dependencies
 between the `/* HJCOPY-START */` and `/* HJCOPY-END */` markers out of `HarkenJot.html` and checks
 it against expected Markdown. Run it after touching anything in that block, and keep the block free of
 DOM, storage and network calls so it keeps working. `node tests/sync-repo-name.test.mjs` slices
-`HJSyncCore` the same way and checks `sameRepo`. `node tests/markdown-text.test.mjs` slices
+`HJSyncCore` the same way and checks `sameRepo`; `node tests/library-order.test.mjs` slices it too and
+checks library order (`patchSources`, `sortSourcesByDate`). `node tests/markdown-text.test.mjs` slices
 `markdownToReadableText` between the `HJMD` markers (with `decodeEntities` stubbed, since the app's
 uses a DOM textarea) and checks how wrapped lines join.
 
@@ -721,6 +723,8 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
   (README rule 4). The Claude GitHub App allows git but blocks REST writes.
 - **v1.74.2** made the repo name case-insensitive wherever this device's sync record is matched to
   Settings (see **A repo name differing only in case is the same repo**).
+- **v1.75.2** keeps library order by date when a sync moves several sources at once, and an
+  out-of-order library re-sorts itself on open.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
@@ -849,6 +853,16 @@ Five rules a pull keeps:
   inserted whole, where its `createdAt` puts it. A pulled `createdAt` change (Move to Today on another
   device) moves an existing source there too (v1.72.5): the library groups by array order, so a date
   patched in place opened today's group at the bottom, below the older ones.
+
+  Every source whose `createdAt` changed comes out of the list before any goes back in (v1.75.2).
+  Placed one at a time, a moved source could stop at another one still waiting at its old spot with
+  its new, older date. Three dates restored in one pull left a Sept 10 source above the Nov 13 group,
+  and every later placement compared against it. Order is never synced, so each device has to keep
+  it itself. App therefore also sorts the library newest first (stable) as it loads from storage
+  (`HJSyncCore.sortSourcesByDate`), which repairs a device that is already out of order. It sorts in
+  `useState`'s initializer, not an effect: `syncPrevRef` starts from that same array, so the
+  recorder never sees the reorder and no sync is scheduled. That also means a single-source restore,
+  which puts an older source at the top, drops to its own date group on the next open.
 - **Text this device lacks is the one exception to write-once.** For a source held with no `content`,
   `text.txt` is read whenever the repo has it, changed since the last pull or not, and patched in.
   Text this device already has always stands.
