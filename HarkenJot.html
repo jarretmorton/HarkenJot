@@ -3114,7 +3114,7 @@
     // Utility functions
     // Shown in the header and stamped into failed-link reports, so a report always
     // names the build it came from.
-    const APP_VERSION = '1.75.2';
+    const APP_VERSION = '1.75.3';
     const generateId = () => Math.random().toString(36).substr(2, 9);
     const safeHostname = (url) => {
       try {
@@ -7311,7 +7311,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
         if (activeTab === 'library') return false;
         if (!currentSource) return false;
         if (activeTab === 'reader') {
-          return currentSource.type === 'article' || currentSource.type === 'pdf';
+          return currentSource.type === 'article' || currentSource.type === 'pdf' || currentSource.type === 'text';
         }
         if (activeTab === 'media') {
           return currentSource.type === 'youtube' || currentSource.type === 'podcast' || currentSource.type === 'xvideo';
@@ -8454,7 +8454,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
 
       // Load source content and saved position when currentSource changes
       useEffect(() => {
-        if (currentSource && (currentSource.type === 'article' || currentSource.type === 'pdf') && currentSource.content) {
+        if (currentSource && (currentSource.type === 'article' || currentSource.type === 'pdf' || currentSource.type === 'text') && currentSource.content) {
           setContent({
             title: currentSource.title,
             sentences: currentSource.sentences || splitIntoSentences(currentSource.content),
@@ -16741,7 +16741,7 @@ Folders whose \`state.json\` has \`status.value\` = \`complete\`, no non-null \`
                         {source.type === 'xvideo' && source.channelName && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>@{source.channelName}</a> : <span className="library-item-meta-name">@{source.channelName}</span>)}
                         {source.type !== 'podcast' && source.type !== 'youtube' && source.type !== 'xvideo' && source.url && <a href={source.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="library-item-meta-name" style={{ color: 'var(--accent)', textDecoration: 'none' }}>{safeHostname(source.url)}</a>}
                         {(source.type === 'podcast' || source.type === 'youtube' || source.type === 'xvideo') && <span style={{ flexShrink: 0 }}>{source.duration ? formatTime(source.duration) : ''}</span>}
-                        {(source.type === 'article' || source.type === 'pdf') && source.content && <span style={{ flexShrink: 0 }}>{(source.content.match(/[^.!?]+[.!?]+/g) || [source.content]).length} sentences</span>}
+                        {(source.type === 'article' || source.type === 'pdf' || source.type === 'text') && source.content && <span style={{ flexShrink: 0 }}>{(source.content.match(/[^.!?]+[.!?]+/g) || [source.content]).length} sentences</span>}
                         {source.copiedAt && (
                           <button
                             className="log-btn"

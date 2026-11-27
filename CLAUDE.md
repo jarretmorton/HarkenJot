@@ -725,6 +725,8 @@ second GitHub Pages site under the same `*.github.io` host would share the real 
   Settings (see **A repo name differing only in case is the same repo**).
 - **v1.75.2** keeps library order by date when a sync moves several sources at once, and an
   out-of-order library re-sorts itself on open.
+- **v1.75.3** opens `text` sources (an agent's pasted text, per the README) in the reader. The
+  reader only loaded `article` and `pdf`, so a `text` source synced in but showed only its title.
 
 **IndexedDB stays the primary store; sync is a layer on top.** With no repo configured, nothing
 sync-related runs. The `HJSync.record*` calls in App's persist effects return immediately, and
